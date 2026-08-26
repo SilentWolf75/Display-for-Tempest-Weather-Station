@@ -21,7 +21,10 @@ static const char *TAG = "wifi_ui";
 #define COL_ALERT     lv_color_hex(0xEF5350)
 
 #define MAX_APS       24
-#define SCAN_STACK    4096
+/* Generous on purpose: this task builds LVGL widgets, and widget creation
+ * with layout and text rendering is not cheap in stack. At 4 KB it faulted
+ * partway through populating a 14-row list. */
+#define SCAN_STACK    8192
 
 static lv_obj_t *s_screen;
 static lv_obj_t *s_prev;
@@ -36,7 +39,9 @@ static lv_obj_t *s_chosen_lbl;
 static char       s_chosen_ssid[CFG_SSID_LEN];
 static net_ap_t   s_aps[MAX_APS];
 static int        s_ap_count;
-static volatile bool s_scanning;
+static volatile bool s_scanning;    /* task in flight */
+static volatile bool s_scan_ready;  /* results awaiting draw */
+static volatile int  s_scan_result;
 
 /* ------------------------------------------------------------------------ */
 
@@ -76,42 +81,79 @@ static void on_ap_clicked(lv_event_t *e)
     set_status("enter the password, then Connect", COL_DIM);
 }
 
-/* Runs outside the LVGL task: net_scan() blocks for about two seconds. */
+/* The scan task does NOT touch LVGL.
+ *
+ * It used to build the network list itself while holding the port lock, and
+ * that crashed reliably inside lv_obj_invalidate() with a NULL dereference
+ * (MTVAL 0x8). Creating widgets from a foreign task is not worth debugging
+ * when the fix is simple: fetch the data here, set a flag, and let the LVGL
+ * task draw it from its own context in wifi_setup_tick().
+ *
+ * The cost is up to one tick (1 s) of latency between the scan finishing and
+ * the list appearing, which is invisible next to the ~3 s scan itself. */
 static void scan_task(void *arg)
 {
     (void)arg;
-    int n = net_scan(s_aps, MAX_APS);
-
-    if (display_lock(-1)) {
-        lv_obj_clean(s_list);
-        s_ap_count = (n > 0) ? n : 0;
-
-        if (n < 0) {
-            set_status("scan failed -- is the radio up?", COL_ALERT);
-        } else if (n == 0) {
-            set_status("no networks found", COL_ALERT);
-        } else {
-            for (int i = 0; i < n; i++) {
-                char row[80];
-                snprintf(row, sizeof(row), "%s   (%s%s)",
-                         s_aps[i].ssid, signal_words(s_aps[i].rssi),
-                         s_aps[i].secure ? "" : ", open");
-                lv_obj_t *btn = lv_list_add_button(
-                    s_list, s_aps[i].secure ? LV_SYMBOL_WIFI : LV_SYMBOL_EYE_OPEN,
-                    row);
-                lv_obj_set_style_text_font(btn, &lv_font_montserrat_16, 0);
-                /* s_aps outlives the buttons, so pointing at it is safe. */
-                lv_obj_add_event_cb(btn, on_ap_clicked, LV_EVENT_CLICKED,
-                                    s_aps[i].ssid);
-            }
-            set_status("pick a network", COL_DIM);
-        }
-        lv_obj_clear_state(s_scan_btn, LV_STATE_DISABLED);
-        display_unlock();
-    }
-
-    s_scanning = false;
+    s_scan_result = net_scan(s_aps, MAX_APS);
+    s_scan_ready  = true;
+    s_scanning    = false;
     vTaskDelete(NULL);
+}
+
+/* Runs in the LVGL task. */
+static void publish_scan_results(void)
+{
+    int n = s_scan_result;
+
+    lv_obj_clean(s_list);
+    s_ap_count = (n > 0) ? n : 0;
+
+    if (n < 0) {
+        set_status("scan failed -- is the radio up?", COL_ALERT);
+    } else if (n == 0) {
+        set_status("no networks found", COL_ALERT);
+    } else {
+        for (int i = 0; i < n; i++) {
+            char row[96];
+            snprintf(row, sizeof(row), "%s  %s   (%s%s)",
+                     s_aps[i].secure ? LV_SYMBOL_WIFI : LV_SYMBOL_EYE_OPEN,
+                     s_aps[i].ssid, signal_words(s_aps[i].rssi),
+                     s_aps[i].secure ? "" : ", open");
+            /* Plain button rather than lv_list_add_button(): that helper
+             * builds an lv_image for the icon and sets its label to
+             * LV_LABEL_LONG_SCROLL_CIRCULAR, so a 20-network list would leave
+             * 20 infinite scroll animations running forever on a core that
+             * also has a weather panel to draw. */
+            lv_obj_t *btn = lv_button_create(s_list);
+            /* LVGL returns NULL when it cannot allocate, and dereferencing
+             * that faults deep inside lv_obj_invalidate() where nothing hints
+             * at memory. Stop cleanly and say so instead. */
+            if (!btn) {
+                ESP_LOGE(TAG, "out of LVGL memory after %d rows", i);
+                set_status("too many networks to list", COL_ALERT);
+                break;
+            }
+            lv_obj_set_width(btn, LV_PCT(100));
+            lv_obj_set_height(btn, 46);
+            lv_obj_set_style_bg_color(btn, COL_BG, 0);
+            lv_obj_set_style_radius(btn, 8, 0);
+
+            lv_obj_t *lbl = lv_label_create(btn);
+            if (lbl) {
+                lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+                lv_label_set_text(lbl, row);
+                lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
+                lv_obj_set_style_text_color(lbl, COL_TEXT, 0);
+                lv_obj_set_width(lbl, LV_PCT(100));
+                lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
+            }
+            /* s_aps is static and outlives the buttons. */
+            lv_obj_add_event_cb(btn, on_ap_clicked, LV_EVENT_CLICKED,
+                                s_aps[i].ssid);
+        }
+        set_status("pick a network", COL_DIM);
+    }
+    lv_obj_clear_state(s_scan_btn, LV_STATE_DISABLED);
 }
 
 static void on_scan(lv_event_t *e)
@@ -120,7 +162,8 @@ static void on_scan(lv_event_t *e)
     if (s_scanning) {
         return;
     }
-    s_scanning = true;
+    s_scanning   = true;
+    s_scan_ready = false;
     lv_obj_add_state(s_scan_btn, LV_STATE_DISABLED);
     set_status("scanning...", COL_ACCENT);
 
@@ -240,11 +283,20 @@ esp_err_t wifi_setup_init(void)
 
 void wifi_setup_tick(void)
 {
-    if (!wifi_setup_is_visible() || s_scanning) {
+    if (!wifi_setup_is_visible()) {
         return;
     }
-    /* Only overwrite the status line once a connection attempt has settled,
-     * so it does not stamp on "scanning..." or a validation message. */
+    /* Draw any pending scan results here, in the LVGL task. */
+    if (s_scan_ready) {
+        s_scan_ready = false;
+        publish_scan_results();
+        return;
+    }
+    if (s_scanning) {
+        return;
+    }
+    /* Only overwrite the status line once things have settled, so it does not
+     * stamp on "scanning..." or a validation message. */
     if (net_is_connected()) {
         char buf[64];
         snprintf(buf, sizeof(buf), LV_SYMBOL_OK "  connected to %s",

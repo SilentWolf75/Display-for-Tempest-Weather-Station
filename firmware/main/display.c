@@ -19,7 +19,10 @@ static const char *TAG = "display";
  * wind dial animation. */
 #define LCD_BIT_PER_PIXEL       16
 #define LVGL_BUF_HEIGHT         (BOARD_LCD_V_RES / 10)
-#define LVGL_TASK_STACK         8192
+/* 16 KB. Building a screenful of widgets in one tick -- a scanned network
+ * list, for instance -- goes several layout passes deep, and 8 KB left no
+ * useful margin. */
+#define LVGL_TASK_STACK         16384
 #define LVGL_TASK_PRIORITY      2
 
 #define BACKLIGHT_LEDC_TIMER    LEDC_TIMER_0
@@ -314,7 +317,11 @@ i2c_master_bus_handle_t display_get_i2c_bus(void)
 
 bool display_lock(int timeout_ms)
 {
-    return lvgl_port_lock(timeout_ms);
+    /* esp_lvgl_port's convention is that ZERO blocks indefinitely, not that
+     * zero returns immediately. Passing a negative value straight through
+     * became 0xFFFFFFFF ms, which overflows pdMS_TO_TICKS and yields a
+     * nonsense timeout rather than the "wait forever" the caller asked for. */
+    return lvgl_port_lock(timeout_ms < 0 ? 0 : (uint32_t)timeout_ms);
 }
 
 void display_unlock(void)
