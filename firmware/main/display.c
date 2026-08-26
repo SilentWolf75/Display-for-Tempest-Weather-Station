@@ -24,8 +24,8 @@ static const char *TAG = "display";
 
 #define BACKLIGHT_LEDC_TIMER    LEDC_TIMER_0
 #define BACKLIGHT_LEDC_CHANNEL  LEDC_CHANNEL_0
-#define BACKLIGHT_DUTY_RES      LEDC_TIMER_10_BIT
-#define BACKLIGHT_FREQ_HZ       5000
+#define BACKLIGHT_DUTY_RES      LEDC_TIMER_11_BIT
+#define BACKLIGHT_FREQ_HZ       BOARD_LCD_BACKLIGHT_FREQ_HZ
 
 static esp_ldo_channel_handle_t   s_mipi_phy_ldo;
 static esp_lcd_panel_handle_t     s_panel;
@@ -48,7 +48,7 @@ static esp_err_t init_backlight(void)
         .timer_num       = BACKLIGHT_LEDC_TIMER,
         .duty_resolution = BACKLIGHT_DUTY_RES,
         .freq_hz         = BACKLIGHT_FREQ_HZ,
-        .clk_cfg         = LEDC_AUTO_CLK,
+        .clk_cfg         = LEDC_USE_PLL_DIV_CLK,
     };
     ESP_RETURN_ON_ERROR(ledc_timer_config(&timer), TAG, "ledc timer");
 
@@ -205,6 +205,22 @@ static esp_err_t init_touch(void)
     };
 
     esp_err_t err = esp_lcd_touch_new_i2c_gt911(tp_io, &tp_cfg, &s_touch);
+    if (err != ESP_OK) {
+        /* The GT911 straps to 0x5D or 0x14 depending on the INT pin level at
+         * power-up, and which one it lands on is not reliably predictable.
+         * Elecrow's own BSP retries on the backup address for this reason. */
+        ESP_LOGW(TAG, "GT911 not at primary address (%s), trying backup",
+                 esp_err_to_name(err));
+        esp_lcd_panel_io_del(tp_io);
+        tp_io = NULL;
+
+        esp_lcd_panel_io_i2c_config_t alt = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+        alt.dev_addr      = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP;
+        alt.scl_speed_hz  = BOARD_I2C_FREQ_HZ;
+        if (esp_lcd_new_panel_io_i2c(s_i2c, &alt, &tp_io) == ESP_OK) {
+            err = esp_lcd_touch_new_i2c_gt911(tp_io, &tp_cfg, &s_touch);
+        }
+    }
     if (err != ESP_OK) {
         /* A dead touch controller should not stop the weather from showing.
          * Log it and carry on read-only. */

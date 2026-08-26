@@ -47,12 +47,19 @@
 /* No panel reset line is wired. */
 #define BOARD_LCD_RESET_GPIO        (-1)
 
-/* No software backlight control. Elecrow's config sets USE_BACKLIGHT to 0;
- * the panel lights whenever the board is powered. display.c skips LEDC setup
- * entirely when this is negative, so display_set_brightness() is a no-op and
- * the night-dimming setting has nothing to act on. */
-#define BOARD_LCD_BACKLIGHT_GPIO    (-1)
+/* Backlight: GPIO 31, PWM. From Elecrow's own bsp_illuminate.c
+ * (LCD_GPIO_BLIGHT 31, BLIGHT_PWM_Hz 30000, 11-bit duty).
+ *
+ * Their Arduino-side esp_panel_board_custom_conf.h says USE_BACKLIGHT(0) with
+ * BACKLIGHT_IO(38), which is misleading: that library simply does not manage
+ * the backlight, and 38 is a leftover template default. The ESP-IDF BSP is the
+ * one that tells the truth.
+ *
+ * With this wrong, the panel initialises perfectly and renders into a dark
+ * screen -- no error, nothing in the log. */
+#define BOARD_LCD_BACKLIGHT_GPIO    31
 #define BOARD_LCD_BACKLIGHT_ON      1
+#define BOARD_LCD_BACKLIGHT_FREQ_HZ 30000
 
 /* ---------------------------- Touch -------------------------------------- */
 
