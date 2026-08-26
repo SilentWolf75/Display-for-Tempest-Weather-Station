@@ -35,17 +35,21 @@ the real hub (or without any network weather at all).
    returns APs. If the ESP-Hosted handshake fails, reflash the C6 slave firmware to the
    version matching the `espressif/esp_hosted` component this project pins.
 
-## Milestone 2 — THE risk gate: UDP broadcast through ESP-Hosted
+## Milestone 2 — THE risk gate: UDP broadcast through ESP-Hosted  ✅ PASSED
 
-Before writing one line of UI. Bind `0.0.0.0:50222`, log every datagram received.
+Confirmed on hardware 2026-08-26. Broadcast traffic from the hub reaches the
+P4 through the C6 over SDIO, unmodified:
 
-- **Works** → continue as designed.
-- **Silence** → the C6 is dropping broadcast frames. Options, in order of preference:
-  (a) join the multicast group / set `IP_ADD_MEMBERSHIP` instead of relying on broadcast,
-  (b) check `esp_hosted` config for a promiscuous/broadcast filter setting,
-  (c) fall back to the Tempest **WebSocket** API — unicast TLS, guaranteed to traverse.
+    main: udp packets: 29 (+12)  wifi: up
+    tempest_udp: obs_st  31.9C  44%RH  979.5mb  wind 0.6/1.0 m/s @296
 
-The abstraction in `wx_state` means swapping ingest does not touch the UI.
+No multicast workaround, no WebSocket fallback, no change to the ingest design.
+The fallbacks documented below were never needed and are kept only in case a
+future ESP-Hosted or C6 firmware regresses this.
+
+Getting here required the SDIO bus to be configured correctly first -- see the
+hard-won facts in CLAUDE.md. The link enumerates happily on the wrong pin map
+and then silently carries no data, which cost most of a day.
 
 ## Milestone 3 — Data layer
 

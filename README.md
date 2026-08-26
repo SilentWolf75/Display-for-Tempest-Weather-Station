@@ -57,10 +57,10 @@ without the UI noticing.
 | Milestone | State |
 |---|---|
 | 0 — Tempest protocol verified against the live station | **done** |
-| 1 — Board bring-up | tooling ready ([checklist](docs/bringup.md)), blocked on hardware |
-| 2 — UDP broadcast through ESP-Hosted (the risk gate) | blocked on hardware |
-| 3 — Data layer | written, **compiles clean**, untested on device |
-| 4 — UI | gauge layout written, **compiles clean**, untested on device |
+| 1 — Board bring-up | **done** — panel, touch, PSRAM, icons, Wi-Fi all verified |
+| 2 — UDP broadcast through ESP-Hosted (the risk gate) | **PASSED** on hardware |
+| 3 — Data layer | **live** — obs_st decoding verified against the real station |
+| 4 — UI | **running on hardware**, touch working |
 | Animated weather icons | Meteocons Lottie + ThorVG, **built and compiling** |
 | 5 — Polish | settings screen + night dimming done; OTA + graphs pending |
 | Correctness pass | **done** — rain/pressure/hi-lo/UV bugs fixed |

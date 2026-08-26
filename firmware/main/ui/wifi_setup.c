@@ -45,6 +45,9 @@ static volatile int  s_scan_result;
 
 /* ------------------------------------------------------------------------ */
 
+static void on_connect(lv_event_t *e);
+static void on_kb_ready(lv_event_t *e);
+
 static void set_status(const char *text, lv_color_t colour)
 {
     lv_label_set_text(s_status, text);
@@ -70,13 +73,13 @@ static void on_ap_clicked(lv_event_t *e)
     s_chosen_ssid[sizeof(s_chosen_ssid) - 1] = '\0';
     (void)btn;
 
-    lv_label_set_text_fmt(s_chosen_lbl, "Password for %s", s_chosen_ssid);
-    lv_obj_clear_flag(s_chosen_lbl, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_pass_ta, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_connect_btn, LV_OBJ_FLAG_HIDDEN);
+    ESP_LOGI(TAG, "network selected: %s", s_chosen_ssid);
 
+    lv_label_set_text_fmt(s_chosen_lbl, "Password for %s", s_chosen_ssid);
     lv_textarea_set_text(s_pass_ta, "");
+    /* The keyboard is always on screen, so there is nothing to reveal -- just
+     * point it at the field and put the cursor there. Hiding it and relying on
+     * a row tap to unhide meant one missed hit-test left no way to type. */
     lv_keyboard_set_textarea(s_keyboard, s_pass_ta);
     set_status("enter the password, then Connect", COL_DIM);
 }
@@ -188,11 +191,15 @@ static void on_connect(lv_event_t *e)
     if (err == ESP_OK) {
         lv_label_set_text_fmt(s_status, "connecting to %s...", s_chosen_ssid);
         lv_obj_set_style_text_color(s_status, COL_ACCENT, 0);
-        lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     } else {
         set_status("could not apply credentials", COL_ALERT);
         ESP_LOGE(TAG, "net_apply_credentials: %s", esp_err_to_name(err));
     }
+}
+
+static void on_kb_ready(lv_event_t *e)
+{
+    on_connect(e);
 }
 
 static void on_back(lv_event_t *e)
@@ -254,28 +261,57 @@ esp_err_t wifi_setup_init(void)
     s_chosen_lbl = lv_label_create(s_screen);
     lv_obj_set_style_text_font(s_chosen_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(s_chosen_lbl, COL_TEXT, 0);
-    lv_label_set_text(s_chosen_lbl, "");
+    lv_label_set_text(s_chosen_lbl, "Tap a network, then type its password");
     lv_obj_set_pos(s_chosen_lbl, 516, 84);
-    lv_obj_add_flag(s_chosen_lbl, LV_OBJ_FLAG_HIDDEN);
 
     s_pass_ta = lv_textarea_create(s_screen);
     lv_obj_set_pos(s_pass_ta, 516, 116);
     lv_obj_set_size(s_pass_ta, 484, 52);
     lv_textarea_set_one_line(s_pass_ta, true);
     lv_textarea_set_password_mode(s_pass_ta, true);
-    lv_textarea_set_placeholder_text(s_pass_ta, "password");
+    lv_textarea_set_placeholder_text(s_pass_ta,
+                                    "password (leave blank if open)");
     lv_obj_set_style_text_font(s_pass_ta, &lv_font_montserrat_18, 0);
-    lv_obj_add_flag(s_pass_ta, LV_OBJ_FLAG_HIDDEN);
 
     s_connect_btn = make_button(s_screen, 516, 180, 160, 48,
                                 "Connect", on_connect);
     lv_obj_set_style_bg_color(s_connect_btn, COL_ACCENT, 0);
-    lv_obj_add_flag(s_connect_btn, LV_OBJ_FLAG_HIDDEN);
 
     s_keyboard = lv_keyboard_create(s_screen);
-    lv_obj_set_pos(s_keyboard, 516, 240);
     lv_obj_set_size(s_keyboard, 484, 318);
-    lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
+    /* lv_keyboard_create() aligns itself LV_ALIGN_BOTTOM_MID by default, and
+     * LVGL treats lv_obj_set_pos() on an ALIGNED object as an offset from that
+     * alignment rather than an absolute position. Setting (516,240) therefore
+     * put it at (786,522) -- almost entirely off a 1024x600 panel, which looks
+     * exactly like the keyboard never being created at all.
+     *
+     * lv_obj_align() with an explicit TOP_LEFT sets the anchor and the offset
+     * together, so the numbers mean what they say. */
+    lv_obj_align(s_keyboard, LV_ALIGN_TOP_LEFT, 516, 240);
+    lv_keyboard_set_textarea(s_keyboard, s_pass_ta);
+    /* The tick on the keyboard connects, so the whole flow can be done from
+     * the keyboard without reaching for the button. */
+    lv_obj_add_event_cb(s_keyboard, on_kb_ready, LV_EVENT_READY, NULL);
+
+    /* Report what actually got built. A widget that is NULL, zero-sized or
+     * positioned off-panel all look identical from the front. */
+    lv_obj_update_layout(s_screen);
+    ESP_LOGI(TAG, "widgets: kb=%p ta=%p connect=%p list=%p",
+             s_keyboard, s_pass_ta, s_connect_btn, s_list);
+    if (s_keyboard) {
+        ESP_LOGI(TAG, "keyboard: x=%d y=%d w=%d h=%d hidden=%d",
+                 (int)lv_obj_get_x(s_keyboard), (int)lv_obj_get_y(s_keyboard),
+                 (int)lv_obj_get_width(s_keyboard),
+                 (int)lv_obj_get_height(s_keyboard),
+                 lv_obj_has_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN) ? 1 : 0);
+    }
+    if (s_pass_ta) {
+        ESP_LOGI(TAG, "textarea: x=%d y=%d w=%d h=%d hidden=%d",
+                 (int)lv_obj_get_x(s_pass_ta), (int)lv_obj_get_y(s_pass_ta),
+                 (int)lv_obj_get_width(s_pass_ta),
+                 (int)lv_obj_get_height(s_pass_ta),
+                 lv_obj_has_flag(s_pass_ta, LV_OBJ_FLAG_HIDDEN) ? 1 : 0);
+    }
 
     ESP_LOGI(TAG, "wi-fi setup screen built");
     return ESP_OK;
