@@ -7,13 +7,15 @@ No Home Assistant, no broker, no cloud dependency for live data — the panel
 listens directly to the Tempest hub's UDP broadcasts on the LAN and only reaches
 out to the internet for the forecast.
 
-Indoor readings come from a Nest Learning Thermostat 4th gen, since the Tempest
-is an outdoor-only station.
+Indoor temperature comes from a **$3 I2C sensor on the Grove header** (AHT20 /
+DHT20 or SHT4x), since the Tempest is an outdoor-only station. A Nest/SDM path
+also exists but is not the default — see [docs/indoor.md](docs/indoor.md) for
+why.
 
 - **Station:** 230728 (hub `HB-00221923`, sensor `ST-00221238`)
 - **Hardware:** [docs/hardware.md](docs/hardware.md)
 - **Outdoor data:** [docs/tempest-api.md](docs/tempest-api.md)
-- **Indoor data:** [docs/nest-api.md](docs/nest-api.md)
+- **Indoor data:** [docs/indoor.md](docs/indoor.md) (Nest alternative: [docs/nest-api.md](docs/nest-api.md))
 - **Weather icons:** [docs/icons.md](docs/icons.md)
 - **Bring-up checklist:** [docs/bringup.md](docs/bringup.md) — start here when the panel arrives
 - **Plan and status:** [docs/roadmap.md](docs/roadmap.md)
@@ -143,7 +145,8 @@ firmware/      ESP-IDF project
     tempest_udp.[ch]  hub broadcast listener + JSON decode
     tempest_rest.[ch] better_forecast poller over TLS
     net.[ch]          Wi-Fi via esp_wifi_remote, SNTP
-    nest.[ch]         Nest thermostat over OAuth + SDM (indoor readings)
+    indoor.[ch]       local I2C temp/humidity sensor (the default)
+    nest.[ch]         Nest over OAuth + SDM (optional alternative)
     display.[ch]      EK79007 + GT911 + LVGL bring-up
     board_pins.h      pin map — UNVERIFIED, read the header
     ui/ui.c           the screen: rings, cards, forecast strip

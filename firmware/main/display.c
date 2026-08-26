@@ -233,6 +233,11 @@ esp_err_t display_init(void)
     return ESP_OK;
 }
 
+i2c_master_bus_handle_t display_get_i2c_bus(void)
+{
+    return s_i2c;
+}
+
 bool display_lock(int timeout_ms)
 {
     return lvgl_port_lock(timeout_ms);

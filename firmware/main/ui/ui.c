@@ -730,7 +730,7 @@ static void update_indoor(const wx_state_t *s, int64_t now)
     if (!s->indoor_valid) {
         lv_label_set_text(in_val, "--");
         lv_label_set_text(in_state, s->indoor_auth_failed ? "REAUTHORIZE"
-                                                          : "no thermostat");
+                                                          : "no sensor");
         lv_obj_set_style_text_color(in_state,
                                     s->indoor_auth_failed ? COL_ALERT
                                                           : COL_IDLE, 0);
@@ -738,7 +738,12 @@ static void update_indoor(const wx_state_t *s, int64_t now)
         return;
     }
 
-    lv_color_t col = hvac_colour(s);
+    /* A bare I2C sensor reports temperature and humidity and nothing else.
+     * Rather than invent an HVAC state, key off the empty mode string and
+     * drop those rows entirely. */
+    bool has_hvac = s->thermostat_mode[0] != '\0';
+
+    lv_color_t col = has_hvac ? hvac_colour(s) : COL_HUMID;
     lv_obj_set_style_arc_color(in_arc, col, LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(in_knob, col, 0);
     lv_obj_set_style_text_color(in_state, col, 0);
@@ -750,6 +755,10 @@ static void update_indoor(const wx_state_t *s, int64_t now)
     lv_arc_set_value(in_arc, (int32_t)(f * 1000.0f));
     place_knob(in_knob, IN_CX, G_CY, f);
 
+    if (!has_hvac) {
+        lv_label_set_text(in_setpoint, "");
+        lv_label_set_text(in_state, "");
+    } else
     /* Only the setpoint matching the active mode is populated, so branch on
      * the mode rather than testing a setpoint for non-zero -- an Eco or OFF
      * thermostat would otherwise read as 0 degrees. */
@@ -767,7 +776,9 @@ static void update_indoor(const wx_state_t *s, int64_t now)
         lv_label_set_text(in_setpoint, "thermostat off");
     }
 
-    if (s->eco_mode) {
+    if (!has_hvac) {
+        /* nothing to say */
+    } else if (s->eco_mode) {
         lv_label_set_text(in_state, "ECO");
     } else if (strcmp(s->hvac_status, "HEATING") == 0) {
         lv_label_set_text(in_state, "HEATING");

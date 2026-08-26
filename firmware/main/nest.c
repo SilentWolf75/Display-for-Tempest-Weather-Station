@@ -17,6 +17,13 @@
 #include "secrets.h"
 #endif
 
+/* This file still compiles when the Nest is not the selected indoor source,
+ * so its Kconfig-gated interval needs a fallback. Keeping it buildable means
+ * switching sources is a menuconfig change, not a code change. */
+#ifndef CONFIG_NEST_POLL_INTERVAL_S
+#define CONFIG_NEST_POLL_INTERVAL_S 300
+#endif
+
 #ifndef NEST_CLIENT_ID
 #define NEST_CLIENT_ID     ""
 #define NEST_CLIENT_SECRET ""

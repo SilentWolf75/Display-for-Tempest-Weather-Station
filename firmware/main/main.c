@@ -31,6 +31,7 @@
 #include "tempest_udp.h"
 #include "tempest_rest.h"
 #include "nest.h"
+#include "indoor.h"
 #include "ui/ui.h"
 #include "ui/wx_icons.h"
 
@@ -127,7 +128,14 @@ void app_main(void)
      * network being up right now. They fail independently by design: losing
      * the internet must not take the local UDP readings down with it. */
     tempest_rest_start();
+
+#if CONFIG_INDOOR_SOURCE_NEST
     nest_start();
+#elif CONFIG_INDOOR_SOURCE_I2C
+    /* After display_init(), which owns the shared I2C bus. Not fatal:
+     * a missing sensor just leaves the indoor gauge empty. */
+    indoor_start();
+#endif
 
     /* --- health log, and the Milestone 2 evidence trail ---
      * If packet_count stays at 0 while Wi-Fi is connected, the C6 is not
