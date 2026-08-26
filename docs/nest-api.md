@@ -16,7 +16,7 @@ weather console splits indoor/outdoor; this is how we get the indoor half.
 - **Model support:** Google's docs state "All Google Nest thermostat models are
   supported in the Device Access program and the API functionality is the same
   for all models." They do not enumerate models, so the 4th gen is covered by
-  that blanket statement rather than by name. **Verify with the curl in step 5
+  that blanket statement rather than by name. **Verify with the curl in step 6
   before writing any more firmware against it** — it costs nothing but the $5
   already spent, and it is the one assumption in this integration that has not
   been tested on real hardware.
@@ -33,7 +33,39 @@ Go to <https://console.nest.google.com/device-access>, accept the terms, pay the
 one-time fee, and create a project. Keep the **Project ID** (a UUID) — that is
 `NEST_PROJECT_ID`.
 
-### 2. Create an OAuth client
+### 2. Configure the OAuth consent screen -- and PUBLISH it
+
+Google Cloud will not let you create an OAuth client until a consent screen
+exists, so this comes first.
+
+In Google Cloud Console -> APIs & Services -> OAuth consent screen (newer
+consoles label this page **Audience**):
+
+- **User type: External.** A personal Gmail account has no other option;
+  Internal requires Google Workspace.
+- **App name** (anything -- "Tempest Display"), **user support email** and
+  **developer contact email**. Nothing else is required.
+- **Scopes: skip.** The `sdm.service` scope is requested in the authorisation
+  URL in step 5, not declared here.
+- **Test users:** add your own Google account.
+- **Then click "Publish app" so the status reads "In production".**
+
+> **DO NOT LEAVE THE APP IN "TESTING".**
+>
+> Google issues refresh tokens that **expire after 7 days** to external apps
+> with Testing publishing status. The panel would lose indoor data every week
+> until you re-authorised in a browser. In production there is no time-based
+> expiry.
+>
+> - <https://developers.google.com/identity/protocols/oauth2>
+> - <https://developers.google.com/nest/device-access/authorize>
+
+Publishing shows an **"unverified app"** warning during the step 5 browser
+consent -- click **Advanced -> Go to (unsafe)**. That is expected. Verification
+is only required to distribute an app to other people; you are the sole user of
+your own project.
+
+### 3. Create an OAuth client
 
 In Google Cloud Console (<https://console.cloud.google.com>), same or a new
 project:
@@ -46,13 +78,13 @@ project:
 Keep the **Client ID** and **Client secret** — `NEST_CLIENT_ID` and
 `NEST_CLIENT_SECRET`.
 
-### 3. Enable the API
+### 4. Enable the API
 
 In the same Cloud project: APIs & Services -> Library -> enable
 **Smart Device Management API**. Skipping this produces a 403 that reads like an
 auth problem but is not.
 
-### 4. Authorise once, in a browser
+### 5. Authorise once, in a browser
 
 Open this URL, substituting your project ID and client ID:
 
@@ -77,7 +109,7 @@ The response contains `refresh_token`, starting `1//`. That is
 before putting the token in a form body, which is why `url_encode()` exists in
 `nest.c`.
 
-### 5. Find the device id, and confirm the 4th gen works
+### 6. Find the device id, and confirm the 4th gen works
 
 ```bash
 curl -X GET 'https://smartdevicemanagement.googleapis.com/v1/enterprises/PROJECT_ID/devices' -H 'Authorization: Bearer ACCESS_TOKEN'
@@ -93,7 +125,7 @@ traits, the integration works. If it is missing or the traits are absent, stop �
 the firmware cannot fix that, and the indoor tiles should be dropped from the
 design rather than left permanently blank.
 
-### 6. Fill in `secrets.h`
+### 7. Fill in `secrets.h`
 
 Copy `firmware/main/secrets.h.example` to `firmware/main/secrets.h` and paste
 all five values. Leaving `NEST_REFRESH_TOKEN` empty disables the indoor tiles
@@ -123,10 +155,13 @@ Everything is stored in **Celsius**, matching the SI-only rule for `wx_state`.
   timed on `esp_timer_get_time()` — a monotonic clock, deliberately, so token
   handling does not depend on SNTP having succeeded.
 - A 401 mid-poll discards the cached token so the next poll re-exchanges.
+- **If the app is left in Testing status the refresh token dies after 7
+  days**, regardless of use. This is the single most likely reason for the
+  indoor tiles going stale a week after setup. Publish the app.
 - The refresh token has no expiry, but **is revoked by a Google password change
   or by removing access in the account's security settings**. That surfaces as
   HTTP 400/401 on refresh, which `nest.c` logs explicitly because it never
-  recovers on its own — you have to redo step 4.
+  recovers on its own — you have to redo step 5.
 
 ## Rate limits
 
