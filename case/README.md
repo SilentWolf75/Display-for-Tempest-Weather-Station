@@ -52,25 +52,34 @@ temperature sensor plugs into, so that cutout matters.
 
 ## Printing
 
-**Shell** — 253 × 153 mm, so it needs a bed of at least 260 mm. On a 270 mm
-bed you have 17 mm to spare; print it square to the axes, not diagonally.
+**Shell** and **bezel** are both 253 × 153 mm, so each needs a bed of at least
+260 mm. On a 270 mm bed you have 17 mm to spare; print them square to the axes,
+not diagonally, and one at a time.
 
-- Flat on the bed, open side up. No supports needed.
+- Shell: flat on the bed, open side up. No supports.
+- Bezel: face down on the bed, so the visible front is the smooth first layer
+  and the chamfer around the window is self-supporting.
 - 0.2 mm layers, 3 walls, 15% infill.
 - PETG or ASA if it will sit in sunlight. **Not PLA** — a weather panel in a
   window gets hot enough to sag it.
 
-**Foot** ×2 — lay the triangular face on the bed. No supports.
-
-Same material. Solid-ish infill (25%) is worth it here; these carry the load.
+**Foot** ×2 — lay the triangular face on the bed. No supports. Same material,
+25% infill; these carry the load.
 
 ## Assembly
 
-1. Four **M3 × 8 mm** countersunk screws through the back of the shell into the
-   board's corner holes. The countersinks are modelled so the heads sit flush.
-2. Four **M3 × 12 mm** into the feet, two per foot, through the pads on the
+1. Drop the board into the shell, face up.
+2. Lay the bezel on top and drive four **M3 countersunk** screws down through
+   the bezel, through the board's corner holes, into the shell's bosses. Length
+   ≈ `BEZEL_T + FRONT_GLASS + BOARD_THICK + 6`, so about **20 mm** at the
+   defaults. The counterbores are modelled so the heads sit flush.
+3. Four **M3 × 12 mm** into the feet, two per foot, through the pads on the
    shell's back.
-3. Route the USB-C power cable out of the right-edge cutout.
+4. Route the USB-C power cable out of the right-edge cutout.
+
+Tighten the four main screws gradually and in a diagonal order. They are
+clamping a glass-fronted panel, and doing one corner fully first is how you
+crack one.
 
 Self-tapping into printed plastic works fine at these loads. If you would
 rather use heat-set inserts, change `BOSS_HOLE` from 2.9 to 4.2 and re-export.

@@ -28,6 +28,28 @@
 // proud of it (too large). Nothing else in this file depends on it.
 REAR_CLEARANCE = 11.0;      // <-- CHANGE ME
 
+// How far the display surface stands PROUD of the PCB's front face. The bezel
+// is recessed by this much so it lies flat on the glass instead of on the PCB
+// and rocking. Straight edge across the front, measure to the PCB.
+FRONT_GLASS = 3.5;          // <-- CHANGE ME
+
+// Total board thickness, front glass to back of PCB, used only to work out
+// screw length. Not critical.
+BOARD_THICK = 6.0;          // <-- CHANGE ME
+
+// Visible active area of the panel and where its bottom-left corner sits
+// relative to the board's bottom-left corner, seen from the FRONT.
+//
+// The default is the active area implied by a 10.1" diagonal at 1024x600
+// (221.3 x 129.7 mm) plus 2 mm of safety all round, assumed centred. It is
+// deliberately GENEROUS: too large only shows a sliver of PCB, too small
+// covers pixels and cannot be undone once printed. Measure the lit area with
+// the panel powered on and tighten these if you want a chunkier frame.
+ACTIVE_W = 225.3;
+ACTIVE_H = 133.7;
+ACTIVE_X = (247.04 - ACTIVE_W) / 2;
+ACTIVE_Y = (147.01 - ACTIVE_H) / 2;
+
 // ---------------------------------------------------------------------------
 // Board geometry (MEASURED, from the PCB file)
 // ---------------------------------------------------------------------------
@@ -159,15 +181,12 @@ module shell() {
         translate([-FIT_GAP, -FIT_GAP, WALL])
             cube([BOARD_W + 2*FIT_GAP, BOARD_H + 2*FIT_GAP, SHELL_D]);
 
-        // Screw holes through the bosses and the back
+        // Blind pilot holes in the bosses. Screws now enter from the FRONT
+        // through the bezel and the board, so the outside of the shell stays
+        // unbroken -- no screw heads on the back of a desk ornament.
         for (h = holes)
-            translate([h[0], h[1], -1])
-                cylinder(d=BOSS_HOLE, h=SHELL_D + 4, $fn=32);
-
-        // Countersinks so screw heads sit flush on the outside
-        for (h = holes)
-            translate([h[0], h[1], -0.1])
-                cylinder(d1=6.4, d2=BOSS_HOLE, h=2.2, $fn=32);
+            translate([h[0], h[1], WALL + 1])
+                cylinder(d=BOSS_HOLE, h=REAR_CLEARANCE, $fn=32);
 
         edge_cutouts();
         vent_grid();
@@ -177,6 +196,60 @@ module shell() {
             for (dx = [-13, 13])
                 translate([fx + dx, 20, -1])
                     cylinder(d=BOSS_HOLE, h=WALL + 6, $fn=24);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Front bezel
+//
+// Sandwiches the board against the shell. The SAME four M3 screws pass through
+// the bezel, through the board's corner holes, and thread into the shell's
+// bosses -- so no extra fixings and no widening the shell past the print bed.
+//
+// The inner edge is chamfered away from the screen so the frame does not cast
+// a shadow line across the picture at an angle.
+// ---------------------------------------------------------------------------
+
+BEZEL_T    = 3.2;       // face thickness in front of the glass
+BEZEL_LIP  = 1.2;       // how far the frame overlaps onto the glass
+
+module bezel() {
+    difference() {
+        union() {
+            // Outer plate, matching the shell footprint exactly.
+            translate([-FIT_GAP - WALL, -FIT_GAP - WALL, 0])
+                rounded_box(SHELL_W, SHELL_H, BEZEL_T + FRONT_GLASS, CORNER_R);
+        }
+
+        // Relief so the frame sits on the glass, not on the PCB.
+        translate([-FIT_GAP, -FIT_GAP, BEZEL_T])
+            cube([BOARD_W + 2*FIT_GAP, BOARD_H + 2*FIT_GAP, FRONT_GLASS + 1]);
+
+        // The window, with a chamfer opening outward.
+        translate([ACTIVE_X + BEZEL_LIP, ACTIVE_Y + BEZEL_LIP, -1])
+            cube([ACTIVE_W - 2*BEZEL_LIP, ACTIVE_H - 2*BEZEL_LIP, BEZEL_T + 2]);
+        translate([ACTIVE_X + BEZEL_LIP, ACTIVE_Y + BEZEL_LIP, -0.01])
+            chamfer_frame(ACTIVE_W - 2*BEZEL_LIP, ACTIVE_H - 2*BEZEL_LIP, 1.6);
+
+        // Screw clearance + counterbore at the four corners.
+        for (h = holes) {
+            translate([h[0], h[1], -1])
+                cylinder(d=3.4, h=BEZEL_T + FRONT_GLASS + 2, $fn=32);
+            translate([h[0], h[1], -0.1])
+                cylinder(d1=6.6, d2=3.4, h=2.0, $fn=32);
+        }
+    }
+}
+
+// A 45-degree relief around a rectangular opening, widening toward the front.
+module chamfer_frame(w, h, c) {
+    difference() {
+        translate([-c, -c, 0]) cube([w + 2*c, h + 2*c, c]);
+        translate([0, 0, -0.01])
+            hull() {
+                cube([w, h, 0.01]);
+                translate([-c, -c, c]) cube([w + 2*c, h + 2*c, 0.01]);
+            }
     }
 }
 
@@ -237,6 +310,7 @@ PART = "preview";
 
 if (PART == "shell") shell();
 else if (PART == "foot") foot();
+else if (PART == "bezel") bezel();
 else {
     // Assembled on a desk, seen from behind.
     //
@@ -252,6 +326,12 @@ else {
                 rotate([0, 0, 90]) rotate([90, 0, 0]) foot();
 
     color("#3a4453") rotate([90 - TILT, 0, 0]) shell();
+
+    // Bezel, flipped to face the viewer and set forward by the board stack.
+    color("#59636f")
+        rotate([90 - TILT, 0, 0])
+            translate([0, 0, WALL + REAR_CLEARANCE + BOARD_THICK])
+                mirror([0, 0, 1]) bezel();
 
     // Desk, for scale.
     color("#20262f") translate([-30, -30, -3]) cube([310, 160, 3]);

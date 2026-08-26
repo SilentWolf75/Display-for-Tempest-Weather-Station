@@ -126,6 +126,7 @@ static lv_point_precise_t needle_tail_pts[2];
 static lv_obj_t *in_temp_arc, *in_temp_knob, *in_temp_val;
 static lv_obj_t *in_hum_arc, *in_hum_knob, *in_hum_val;
 static lv_obj_t *in_comfort_badge, *in_status_lbl;
+static lv_obj_t *in_no_sensor_view;
 
 /* Zone 4: Current Weather Scene */
 static lv_obj_t *wx_scene_icon, *wx_scene_cond, *wx_scene_sub, *wx_scene_badge;
@@ -544,6 +545,21 @@ static void build_top_deck(lv_obj_t *scr)
     in_comfort_badge = clabel(z3, Z3_W / 2, 166, 220, &lv_font_montserrat_16, COL_OK, "Comfortable");
     in_status_lbl = clabel(z3, Z3_W / 2, 196, 220, &lv_font_montserrat_14, COL_FAINT, "sensor active");
 
+    /* Optional sensor placeholder container */
+    in_no_sensor_view = lv_obj_create(z3);
+    lv_obj_set_pos(in_no_sensor_view, 10, 36);
+    lv_obj_set_size(in_no_sensor_view, Z3_W - 20, 176);
+    lv_obj_set_style_bg_opa(in_no_sensor_view, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(in_no_sensor_view, 0, 0);
+    lv_obj_clear_flag(in_no_sensor_view, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *in_opt_icon = label(in_no_sensor_view, &lv_font_montserrat_34, COL_INDOOR_TEMP, LV_SYMBOL_HOME);
+    lv_obj_align(in_opt_icon, LV_ALIGN_TOP_MID, 0, 10);
+    clabel(in_no_sensor_view, (Z3_W - 20) / 2, 60, Z3_W - 24, &lv_font_montserrat_16, COL_TEXT, "INDOOR MODULE");
+    clabel(in_no_sensor_view, (Z3_W - 20) / 2, 88, Z3_W - 24, &lv_font_montserrat_14, COL_DIM, "Grove I2C Sensor Port");
+    clabel(in_no_sensor_view, (Z3_W - 20) / 2, 114, Z3_W - 24, &lv_font_montserrat_14, COL_FAINT, "SHTC3 / SHT31 / BME280");
+    lv_obj_add_flag(in_no_sensor_view, LV_OBJ_FLAG_HIDDEN);
+
     /* --- ZONE 4: CURRENT WEATHER SCENE --- */
     lv_obj_t *z4 = make_card(scr, PAD + Z1_W + Z2_W + Z3_W + 18, TOP_Y, Z4_W, TOP_H, COL_CARD_BORDER, COL_SUN_GOLD);
 
@@ -565,7 +581,7 @@ static void build_top_deck(lv_obj_t *scr)
 
 static void build_mid_deck(lv_obj_t *scr)
 {
-    /* --- MID 1: RAIN CYLINDER & PRECIPITATION --- */
+    /* --- MID 1: RAIN & PRECIPITATION --- */
     lv_obj_t *m1 = make_card(scr, PAD, MID_Y, M1_W, MID_H, COL_CARD_BORDER, COL_RAIN_NEON);
     lv_obj_add_flag(m1, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(m1, on_open_graphs, LV_EVENT_CLICKED, NULL);
@@ -586,6 +602,16 @@ static void build_mid_deck(lv_obj_t *scr)
     lv_obj_set_style_radius(cyl_bg, 6, 0);
     lv_obj_set_style_pad_all(cyl_bg, 2, 0);
     lv_obj_clear_flag(cyl_bg, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Beaker hash ticks */
+    for (int tk = 1; tk <= 3; tk++) {
+        lv_obj_t *h_line = lv_obj_create(cyl_bg);
+        lv_obj_set_size(h_line, 8, 1);
+        lv_obj_set_pos(h_line, 0, 70 - tk * 18);
+        lv_obj_set_style_bg_color(h_line, COL_DIM, 0);
+        lv_obj_set_style_border_width(h_line, 0, 0);
+        lv_obj_clear_flag(h_line, LV_OBJ_FLAG_SCROLLABLE);
+    }
 
     rain_cylinder_fill = lv_obj_create(cyl_bg);
     lv_obj_set_size(rain_cylinder_fill, 20, 10);
@@ -782,7 +808,7 @@ static void on_graphs(lv_event_t *e)
 static void apply_brightness(int64_t now)
 {
     static int last_minute = -1;
-    if (!net_time_is_valid()) {
+    if (now < 1700000000LL && !net_time_is_valid()) {
         return;
     }
     time_t t = (time_t)now;
@@ -905,7 +931,7 @@ static void update_header(const wx_state_t *s, int64_t now)
 {
     char buf[64];
 
-    if (net_time_is_valid()) {
+    if (now > 1700000000LL || net_time_is_valid()) {
         time_t t = (time_t)now;
         struct tm lt;
         localtime_r(&t, &lt);
@@ -1002,6 +1028,12 @@ static void update_top_deck(const wx_state_t *s, int64_t now)
 
     /* Zone 3: Indoor Climate */
     if (s->indoor_valid) {
+        lv_obj_add_flag(in_no_sensor_view, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(in_temp_arc, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(in_hum_arc, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(in_comfort_badge, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(in_status_lbl, LV_OBJ_FLAG_HIDDEN);
+
         set_text(in_temp_val, "%.1f°", (double)U_TEMP(s->indoor_temp_c));
         set_text(in_hum_val, "%.0f%%", (double)s->indoor_humidity_pct);
 
@@ -1040,12 +1072,11 @@ static void update_top_deck(const wx_state_t *s, int64_t now)
             lv_obj_set_style_text_color(in_status_lbl, COL_FAINT, 0);
         }
     } else {
-        lv_label_set_text(in_temp_val, "--");
-        lv_label_set_text(in_hum_val, "--");
-        lv_label_set_text(in_comfort_badge, "No Indoor Sensor");
-        lv_obj_set_style_text_color(in_comfort_badge, COL_DIM, 0);
-        lv_label_set_text(in_status_lbl, "Grove I2C port ready");
-        lv_obj_set_style_text_color(in_status_lbl, COL_FAINT, 0);
+        lv_obj_clear_flag(in_no_sensor_view, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(in_temp_arc, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(in_hum_arc, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(in_comfort_badge, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(in_status_lbl, LV_OBJ_FLAG_HIDDEN);
     }
 
     /* Zone 4: Current Weather Scene */
@@ -1059,7 +1090,7 @@ static void update_top_deck(const wx_state_t *s, int64_t now)
         }
     } else {
         wx_icon_set(wx_scene_icon, "clear-day");
-        lv_label_set_text(wx_scene_cond, "Live Station Feed");
+        lv_label_set_text(wx_scene_cond, "Sunny / Clear");
         set_text(wx_scene_sub, "Tempest Station Live");
     }
 }
@@ -1094,7 +1125,7 @@ static void update_mid_deck(const wx_state_t *s, int64_t now)
     }
 
     /* --- MID 2: Solar & Lunar Track --- */
-    if (s->sunrise_epoch > 0 && s->sunset_epoch > 0 && net_time_is_valid()) {
+    if (s->sunrise_epoch > 0 && s->sunset_epoch > 0 && (now > 1700000000LL || net_time_is_valid())) {
         char rise[16], set[16];
         time_t r = (time_t)s->sunrise_epoch;
         time_t st = (time_t)s->sunset_epoch;

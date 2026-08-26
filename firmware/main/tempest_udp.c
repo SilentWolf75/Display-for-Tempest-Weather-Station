@@ -77,9 +77,16 @@ static void handle_obs_st(const cJSON *root)
     p.lightning_avg_dist_km   = (float)arr_num(o, OBS_STRIKE_DIST, 0);
     p.lightning_count         = (int)arr_num(o, OBS_STRIKE_COUNT, 0);
     p.battery_v               = (float)arr_num(o, OBS_BATTERY, 0);
-    p.report_interval_min     = (int)arr_num(o, OBS_REPORT_INTERVAL, 1);
-
     wx_update_obs_st(&p);
+
+    if (p.obs_epoch > 1700000000LL) {
+        time_t cur = time(NULL);
+        if (cur < 1700000000LL) {
+            struct timeval tv = { .tv_sec = (time_t)p.obs_epoch, .tv_usec = 0 };
+            settimeofday(&tv, NULL);
+            ESP_LOGI(TAG, "clock synced from Tempest packet: epoch %lld", (long long)p.obs_epoch);
+        }
+    }
 
     ESP_LOGI(TAG, "obs_st  %.1fC  %.0f%%RH  %.1fmb  wind %.1f/%.1f m/s @%d",
              p.air_temp_c, p.humidity_pct, p.pressure_mb,
