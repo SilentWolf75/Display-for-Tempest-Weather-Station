@@ -5,6 +5,22 @@
 
 CONFIG_IDF_TARGET="esp32p4"
 
+# --- Silicon revision ---
+# IDF 5.5.3 defaults to ESP32P4_REV_MIN_301 (v3.01). The ESP32-P4 Elecrow
+# fitted to this panel is revision **v1.3**, so the stock bootloader refuses to
+# flash:
+#   "bootloader.bin requires chip revision in range [v3.1 - v3.99]
+#    (this chip is revision v1.3)"
+# Espressif treats pre-3.0 and 3.0+ as two incompatible hardware branches, and
+# hides the older revisions behind ESP32P4_SELECTS_REV_LESS_V3 (default n).
+# Both symbols are required: without the gate, CONFIG_ESP32P4_REV_MIN_100 is
+# not even a valid choice and is silently dropped from sdkconfig.
+#
+# Do NOT "fix" this with esptool --force: that flashes a bootloader built with
+# ECO workarounds and ROM entry points this silicon does not have.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
+
 # --- OTA ---
 # Roll back automatically if a freshly flashed image never marks itself valid.
 # Without this a bad update means physically retrieving a wall-mounted panel.
@@ -40,8 +56,25 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y
 # --- Networking is proxied to the ESP32-C6 over SDIO (ESP-Hosted) ---
 CONFIG_ESP_WIFI_REMOTE_ENABLED=y
 CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
-CONFIG_ESP_HOSTED=y
-CONFIG_ESP_HOSTED_HOST=y
+# esp_hosted 2.12.x names these differently from 3.x -- ESP_HOSTED_ENABLED
+# rather than ESP_HOSTED, plus an explicit co-processor target. Setting the
+# 3.x names produces only a "unknown kconfig symbol" warning and silently
+# leaves the transport unconfigured.
+CONFIG_ESP_HOSTED_ENABLED=y
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+
+# ESP-Hosted warns about this itself at boot:
+#   "CONFIG_FREERTOS_HZ is 100, ESP-Hosted recommended 1000, to avoid bus
+#    level jitters"
+# At 100 Hz the SDIO transfers to the C6 time out (sdmmc_send_cmd 0x107) and
+# the slave never becomes ready. A 1 ms tick costs a little scheduling
+# overhead and buys a working radio.
+CONFIG_FREERTOS_HZ=1000
+
+# 40 MHz is the component default. Dropped to 20 MHz: this link crosses a
+# connector on a consumer panel, not a controlled trace, and the radio does
+# not need the bandwidth. Raise it again only if throughput ever matters.
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=20000
 
 # UDP broadcast ingest: make sure LwIP is not the thing that drops our frames.
 # The default UDP PCB / mbox sizes are tight for a 3-second rapid_wind stream
@@ -88,6 +121,10 @@ CONFIG_LV_FONT_DEFAULT_MONTSERRAT_14=y
 
 # LVGL colour depth must match the panel and the lvgl_port display config.
 CONFIG_LV_COLOR_DEPTH_16=y
+
+# 50 ms refresh. A weather panel that changes once a second does not need the
+# default 33 ms, and every refresh costs real work on this CPU.
+CONFIG_LV_DEF_REFR_PERIOD=50
 
 # Draw buffers live in PSRAM; LVGL needs to know it may use it.
 CONFIG_LV_USE_PERF_MONITOR=n

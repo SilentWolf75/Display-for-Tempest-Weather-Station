@@ -7,6 +7,7 @@
 #include "driver/ledc.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_mipi_dsi.h"
+#include "esp_ldo_regulator.h"
 #include "esp_lcd_ek79007.h"
 #include "esp_lcd_touch_gt911.h"
 #include "esp_lvgl_port.h"
@@ -17,7 +18,7 @@ static const char *TAG = "display";
  * two full buffers are affordable and double buffering is worth it for the
  * wind dial animation. */
 #define LCD_BIT_PER_PIXEL       16
-#define LVGL_BUF_HEIGHT         (BOARD_LCD_V_RES / 4)
+#define LVGL_BUF_HEIGHT         (BOARD_LCD_V_RES / 10)
 #define LVGL_TASK_STACK         8192
 #define LVGL_TASK_PRIORITY      2
 
@@ -26,6 +27,7 @@ static const char *TAG = "display";
 #define BACKLIGHT_DUTY_RES      LEDC_TIMER_10_BIT
 #define BACKLIGHT_FREQ_HZ       5000
 
+static esp_ldo_channel_handle_t   s_mipi_phy_ldo;
 static esp_lcd_panel_handle_t     s_panel;
 static esp_lcd_touch_handle_t     s_touch;
 static i2c_master_bus_handle_t    s_i2c;
@@ -83,8 +85,38 @@ void display_set_brightness(int percent)
 
 /* ------------------------------------------------------------------------ */
 
+/* The ESP32-P4's MIPI D-PHY is powered from VDD_MIPI_DPHY, which must be
+ * supplied at 2.5 V. On this board that comes from the chip's own LDO channel
+ * 3 (LDO_VO3), and nothing enables it automatically.
+ *
+ * Skipping this does not produce an error. The PHY simply has no power, and
+ * esp_lcd_panel_init() blocks forever -- the main task hangs and the task
+ * watchdog fires every 5 s with no other clue. Cost me an evening; see
+ * examples/peripherals/lcd/mipi_dsi in ESP-IDF, which does the same thing. */
+#define MIPI_PHY_LDO_CHAN       3
+#define MIPI_PHY_LDO_VOLTAGE_MV 2500
+
+static esp_err_t enable_mipi_phy_power(void)
+{
+    esp_ldo_channel_config_t cfg = {
+        .chan_id    = MIPI_PHY_LDO_CHAN,
+        .voltage_mv = MIPI_PHY_LDO_VOLTAGE_MV,
+    };
+    esp_err_t err = esp_ldo_acquire_channel(&cfg, &s_mipi_phy_ldo);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "could not power VDD_MIPI_DPHY: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "MIPI D-PHY powered (LDO chan %d @ %d mV)",
+             MIPI_PHY_LDO_CHAN, MIPI_PHY_LDO_VOLTAGE_MV);
+    return ESP_OK;
+}
+
 static esp_err_t init_panel(void)
 {
+    ESP_RETURN_ON_ERROR(enable_mipi_phy_power(), TAG, "mipi phy power");
+
     /* Bus, IO and DPI timing all come from the esp_lcd_ek79007 component's own
      * macros rather than hand-entered numbers. The component ships the correct
      * 1024x600 configuration for this panel; the values in board_pins.h are a
@@ -95,6 +127,11 @@ static esp_err_t init_panel(void)
      * variant Elecrow actually fitted. */
     esp_lcd_dsi_bus_handle_t dsi_bus = NULL;
     esp_lcd_dsi_bus_config_t bus_config = EK79007_PANEL_BUS_DSI_2CH_CONFIG();
+    /* The component macro hardcodes 900 Mbps. Elecrow drives this panel at
+     * 1000, and at 900 esp_lcd_panel_init() never returns -- the main task
+     * hangs and the task watchdog fires every 5 s forever. Verified on
+     * hardware; do not "simplify" this back to the bare macro. */
+    bus_config.lane_bit_rate_mbps = BOARD_MIPI_DSI_LANE_MBPS;
     ESP_RETURN_ON_ERROR(esp_lcd_new_dsi_bus(&bus_config, &dsi_bus),
                         TAG, "dsi bus");
 
@@ -105,6 +142,10 @@ static esp_err_t init_panel(void)
 
     esp_lcd_dpi_panel_config_t dpi_config =
         EK79007_1024_600_PANEL_60HZ_CONFIG(LCD_COLOR_PIXEL_FORMAT_RGB565);
+
+    /* One frame buffer: tear-avoidance is off (see init_lvgl), so LVGL never
+     * asks for a second one to flip between. */
+    dpi_config.num_fbs = 1;
 
     ek79007_vendor_config_t vendor_config = {
         .mipi_config = {
@@ -153,8 +194,8 @@ static esp_err_t init_touch(void)
         .rst_gpio_num = BOARD_TOUCH_RST_GPIO,
         .int_gpio_num = BOARD_TOUCH_INT_GPIO,
         .levels = {
-            .reset     = 0,
-            .interrupt = 0,
+            .reset     = BOARD_TOUCH_RST_LEVEL,
+            .interrupt = BOARD_TOUCH_INT_LEVEL,
         },
         .flags = {
             .swap_xy  = 0,
@@ -180,11 +221,18 @@ static esp_err_t init_lvgl(void)
     port_cfg.task_priority = LVGL_TASK_PRIORITY;
     port_cfg.task_stack    = LVGL_TASK_STACK;
     port_cfg.timer_period_ms = 5;
+    /* Core 1. The network stack, the UDP listener and the SDIO transport all
+     * live on core 0, and rendering a vector animation across a 1024x600
+     * panel is enough to starve that core's idle task into a watchdog trip. */
+    port_cfg.task_affinity = 1;
+    /* Let the task actually sleep when there is nothing to draw, rather than
+     * spinning on a 5 ms timer. */
+    port_cfg.task_max_sleep_ms = 500;
     ESP_RETURN_ON_ERROR(lvgl_port_init(&port_cfg), TAG, "lvgl port");
 
     lvgl_port_display_cfg_t disp_cfg = {
         .panel_handle = s_panel,
-        .buffer_size  = BOARD_LCD_H_RES * LVGL_BUF_HEIGHT,
+        .buffer_size  = BOARD_LCD_H_RES * LVGL_BUF_HEIGHT,   /* partial */
         .double_buffer = true,
         .hres         = BOARD_LCD_H_RES,
         .vres         = BOARD_LCD_V_RES,
@@ -203,7 +251,17 @@ static esp_err_t init_lvgl(void)
 
     lvgl_port_display_dsi_cfg_t dsi_cfg = {
         .flags = {
-            .avoid_tearing = true,
+            /* OFF, deliberately. avoid_tearing puts LVGL in full-refresh mode:
+             * every frame redraws all 614400 pixels whether anything changed
+             * or not. Measured on hardware, that saturates an entire 360 MHz
+             * core and starves the idle task badly enough to trip the task
+             * watchdog every 5 seconds, forever.
+             *
+             * With it off, LVGL redraws only invalidated regions -- which on a
+             * weather panel updating once a second is a few small labels. The
+             * cost is possible tearing on fast animation, which this display
+             * does not have. */
+            .avoid_tearing = false,
         },
     };
 

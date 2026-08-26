@@ -9,8 +9,18 @@ dependencies:
   ## --- Networking: the P4 has no radio; these proxy Wi-Fi to the ESP32-C6 ---
   espressif/esp_wifi_remote:
     version: "*"
+  ## Pinned to match the ESP-Hosted slave firmware Elecrow ships on the C6:
+  ## example/.../Advance_P4_On-Board_ESP32C6_Firmware_V2.12.3_2026_04_08/
+  ## in Elecrow-RD/CrowPanel-Advanced-10.1inch-ESP32-P4-...
+  ##
+  ## With the host on 3.0.6 the SDIO link comes up ("Card init success",
+  ## "Open data path at slave") and then the handshake on top of it times out:
+  ##   eh_reconfigure: bring-up timed out (5000ms); returning -EIO
+  ##   net: esp_wifi_init failed: ESP_FAIL
+  ## The transport working while the protocol does not is the tell for a
+  ## version mismatch. Only unpin this if the C6 is reflashed to match.
   espressif/esp_hosted:
-    version: "*"
+    version: "==2.12.3"
 
   ## --- Display: EK79007 over MIPI-DSI, GT911 touch over I2C ---
   espressif/esp_lcd_ek79007:

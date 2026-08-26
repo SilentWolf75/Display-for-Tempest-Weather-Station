@@ -256,7 +256,7 @@ static void build_header(lv_obj_t *scr)
 
     /* The one animated icon on the panel. Everything else is static, so the
      * vector renderer only ever drives a single 96px surface. */
-    hdr_icon = wx_icon_create(p, 52, true);
+    hdr_icon = wx_icon_create(p, 52, false);   /* DIAGNOSTIC: animation off */
     if (hdr_icon) {
         lv_obj_align(hdr_icon, LV_ALIGN_LEFT_MID, 6, 0);
     }
