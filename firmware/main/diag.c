@@ -13,7 +13,9 @@
 #include "esp_ota_ops.h"
 #include "esp_mac.h"
 #include "driver/i2c_master.h"
+#if CONFIG_TEMPEST_NETWORK_ENABLED
 #include "esp_wifi.h"
+#endif
 
 static const char *TAG = "diag";
 
@@ -153,6 +155,9 @@ void diag_report_hardware(void)
 
 void diag_report_network(void)
 {
+#if !CONFIG_TEMPEST_NETWORK_ENABLED
+    ESP_LOGI(TAG, "--- network: compiled out ---");
+#else
     ESP_LOGI(TAG, "--- network (ESP32-C6 over SDIO) ---");
 
     wifi_ap_record_t ap;
@@ -166,6 +171,7 @@ void diag_report_network(void)
         ESP_LOGW(TAG, "  ESP-Hosted link to the C6 is not up -- that is a");
         ESP_LOGW(TAG, "  firmware version mismatch, not a Wi-Fi problem.");
     }
+#endif
 }
 
 void diag_run_all(void)

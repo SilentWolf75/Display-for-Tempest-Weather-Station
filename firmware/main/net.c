@@ -1,6 +1,27 @@
 #include "net.h"
 #include "wx_state.h"
 
+#if !CONFIG_TEMPEST_NETWORK_ENABLED
+
+#include "esp_log.h"
+
+/* Display-only build. Every esp_wifi_* symbol comes from esp_wifi_remote,
+ * which is compiled out here, so this file must not reference any of them
+ * -- IDF's own esp_wifi has no implementation on the radio-less P4 and the
+ * link would fail. */
+esp_err_t net_start(void)
+{
+    ESP_LOGW("net", "networking is compiled out (CONFIG_TEMPEST_NETWORK_ENABLED=n)");
+    wx_set_wifi_connected(false);
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+bool net_is_connected(void) { return false; }
+bool net_time_is_valid(void) { return false; }
+
+#else
+
+
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
@@ -152,3 +173,5 @@ bool net_time_is_valid(void)
 {
     return s_time_valid;
 }
+
+#endif /* CONFIG_TEMPEST_NETWORK_ENABLED */

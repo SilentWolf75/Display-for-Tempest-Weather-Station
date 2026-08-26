@@ -9,16 +9,20 @@ dependencies:
   ## --- Networking: the P4 has no radio; these proxy Wi-Fi to the ESP32-C6 ---
   espressif/esp_wifi_remote:
     version: "*"
-  ## Pinned to match the ESP-Hosted slave firmware Elecrow ships on the C6:
-  ## example/.../Advance_P4_On-Board_ESP32C6_Firmware_V2.12.3_2026_04_08/
-  ## in Elecrow-RD/CrowPanel-Advanced-10.1inch-ESP32-P4-...
+  ## Pinned to the pair Elecrow's own Wi-Fi lesson uses, which is the
+  ## combination their factory C6 firmware actually speaks:
+  ##   example/V1.0/idf-code/Lesson17-Wi-Fi_function/ESP32_P4-softAP/
+  ##     main/idf_component.yml  ->  esp_hosted ~2.7.0, esp_wifi_remote ^0.16.1
   ##
-  ## With the host on 3.0.6 the SDIO link comes up ("Card init success",
-  ## "Open data path at slave") and then the handshake on top of it times out:
-  ##   eh_reconfigure: bring-up timed out (5000ms); returning -EIO
-  ##   net: esp_wifi_init failed: ESP_FAIL
-  ## The transport working while the protocol does not is the tell for a
-  ## version mismatch. Only unpin this if the C6 is reflashed to match.
+  ## Do not infer the version from the firmware file Elecrow ships under
+  ## "Firmware_Upgrade_Guide/..._V2.12.3_...": that is an optional UPGRADE, not
+  ## what the board leaves the factory with. Pinning 2.12.3 to match that name
+  ## still failed.
+  ##
+  ## The failure signature for a mismatch: SDIO enumerates fine ("Card init
+  ## success", "Open data path at slave") and then the protocol on top never
+  ## completes -- "Not able to connect with ESP-Hosted slave device" -- and the
+  ## retry loop eventually reboots the board.
   espressif/esp_hosted:
     version: "==2.12.3"
 

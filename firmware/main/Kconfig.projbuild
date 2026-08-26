@@ -1,5 +1,22 @@
 menu "Tempest Weather Display"
 
+    config TEMPEST_NETWORK_ENABLED
+        bool "Enable networking (Wi-Fi, forecast, OTA)"
+        default y
+        help
+            Turn this OFF to build a display-only image with all networking
+            compiled out.
+
+            Needed while the ESP32-C6 co-processor is not usable: when
+            ESP-Hosted cannot read the slave's registers it deliberately
+            restarts the P4 ("Host is reseting itself"), which reboots the
+            board every ~15 seconds and makes the panel flash continuously.
+            There is no runtime way to stop that, so it has to be a build
+            option.
+
+            With this off the panel renders and touch works; there is simply
+            no weather data.
+
     config TEMPEST_WIFI_SSID
         string "Wi-Fi SSID"
         default "changeme"

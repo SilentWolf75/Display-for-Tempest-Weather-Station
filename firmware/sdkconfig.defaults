@@ -55,13 +55,51 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y
 
 # --- Networking is proxied to the ESP32-C6 over SDIO (ESP-Hosted) ---
 CONFIG_ESP_WIFI_REMOTE_ENABLED=y
-CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
-# esp_hosted 2.12.x names these differently from 3.x -- ESP_HOSTED_ENABLED
-# rather than ESP_HOSTED, plus an explicit co-processor target. Setting the
-# 3.x names produces only a "unknown kconfig symbol" warning and silently
-# leaves the transport unconfigured.
+
+# --- ESP-Hosted SDIO link to the ESP32-C6 -----------------------------------
+# These come from Elecrow's own firmware upgrade guide
+# ("CrowPanel_Advance_ESP32-P4 Display_Firmware_Upgrade_Guide-ESP_IDF
+# platform.pdf"), which states outright: "Pin assignments vary by hardware
+# version" and then lists a DIFFERENT set per panel size and revision.
+#
+# The 10.1 inch uses a **1-bit** SDIO bus. The component default is 4-bit, and
+# the failure that produces is deceptive: enumeration only needs CMD and CLK,
+# so "Card init success" is printed and the card reports its block sizes --
+# then every data transfer times out on the unconnected D2/D3 lines:
+#     sdmmc_io_rw_extended: sdmmc_send_cmd returned 0x107
+#     H_SDIO_DRV: failed to read registers
+#     H_SDIO_DRV: Host is reseting itself
+# and ESP-Hosted reboots the whole board, forever.
+#
+# The slave reset line is GPIO 32, not the component default of 54, so the C6
+# was also never actually being reset.
 CONFIG_ESP_HOSTED_ENABLED=y
-CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
+CONFIG_ESP_HOSTED_SDIO_1_BIT_BUS=y
+CONFIG_ESP_HOSTED_SDIO_BUS_WIDTH=1
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=19
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=18
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=14
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_1BIT_BUS_SLOT_1=15
+CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=32
+CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
+
+# ###########################################################################
+# Networking is compiled out until the C6 co-processor works.
+#
+# The SDIO settings above are CORRECT and verified against Elecrow's guide:
+# the card enumerates, reports its block sizes and opens a data path. What
+# never happens is the slave announcing itself ready, across host versions
+# 2.7.4, 2.12.3, 2.12.12 and 3.0.6. That isolates the fault to the firmware
+# running on the C6.
+#
+# ESP-Hosted responds to the failure by restarting the P4 every ~15 s, which
+# makes the panel flash continuously, so it cannot simply be left enabled and
+# ignored. Set this back to y once the C6 is running Elecrow's
+# network_adapter.bin (ESP-Hosted 2.12.3).
+# ###########################################################################
+CONFIG_TEMPEST_NETWORK_ENABLED=n
 
 # ESP-Hosted warns about this itself at boot:
 #   "CONFIG_FREERTOS_HZ is 100, ESP-Hosted recommended 1000, to avoid bus
@@ -71,10 +109,6 @@ CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
 # overhead and buys a working radio.
 CONFIG_FREERTOS_HZ=1000
 
-# 40 MHz is the component default. Dropped to 20 MHz: this link crosses a
-# connector on a consumer panel, not a controlled trace, and the radio does
-# not need the bandwidth. Raise it again only if throughput ever matters.
-CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=20000
 
 # UDP broadcast ingest: make sure LwIP is not the thing that drops our frames.
 # The default UDP PCB / mbox sizes are tight for a 3-second rapid_wind stream

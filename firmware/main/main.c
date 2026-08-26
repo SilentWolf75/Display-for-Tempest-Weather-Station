@@ -104,13 +104,18 @@ void app_main(void)
         }
     }
 
+#if CONFIG_TEMPEST_NETWORK_ENABLED
     /* --- network: not fatal --- */
     err = net_start();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "network not up yet (%s); retrying in background",
                  esp_err_to_name(err));
     }
+#else
+    ESP_LOGW(TAG, "display-only build: no Wi-Fi, no station data, no OTA");
+#endif
 
+#if CONFIG_TEMPEST_NETWORK_ENABLED
 #if CONFIG_DIAG_ON_BOOT
     diag_report_network();
 #endif
@@ -121,12 +126,15 @@ void app_main(void)
 
     /* --- live data --- */
     ESP_ERROR_CHECK(tempest_udp_start());
+#endif
 
     /* --- forecast: the only cloud feed ---
      * Backs off and retries on its own, so it does not wait on the network
      * being up right now. It fails independently by design: losing the
      * internet must not take the local UDP readings down with it. */
+#if CONFIG_TEMPEST_NETWORK_ENABLED
     tempest_rest_start();
+#endif
 
     /* After display_init(), which owns the shared I2C bus. Not fatal:
      * a missing sensor just leaves the indoor gauge empty. */
