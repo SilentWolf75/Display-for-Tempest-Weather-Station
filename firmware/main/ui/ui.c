@@ -4,6 +4,7 @@
 #include "config.h"
 #include "settings.h"
 #include "graphs.h"
+#include "wifi_setup.h"
 #include "display.h"
 #include "net.h"
 
@@ -535,6 +536,7 @@ esp_err_t ui_init(void)
 
     settings_init();
     graphs_init();
+    wifi_setup_init();
 
     ESP_LOGI(TAG, "screen built (%dx%d)", SCR_W, SCR_H);
     return ESP_OK;
@@ -808,6 +810,10 @@ void ui_tick(void)
     }
     if (graphs_is_visible()) {
         graphs_tick();
+        return;
+    }
+    if (wifi_setup_is_visible()) {
+        wifi_setup_tick();
         return;
     }
 

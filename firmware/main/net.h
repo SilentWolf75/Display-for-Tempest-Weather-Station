@@ -18,6 +18,25 @@ esp_err_t net_start(void);
 
 bool net_is_connected(void);
 
+/* One scanned access point. */
+typedef struct {
+    char    ssid[33];
+    int8_t  rssi;
+    bool    secure;
+} net_ap_t;
+
+/* Blocking active scan, roughly 2 seconds. Returns how many entries were
+ * written, or negative on error. Must NOT be called from the LVGL task -- it
+ * blocks far longer than a frame. */
+int net_scan(net_ap_t *out, int max_aps);
+
+/* Stores the credentials and reconnects with them. Safe to call while already
+ * connected; the existing association is dropped first. */
+esp_err_t net_apply_credentials(const char *ssid, const char *password);
+
+/* SSID currently configured, or "" if none. Never returns NULL. */
+const char *net_current_ssid(void);
+
 /* True once SNTP has set a plausible wall clock. Sunrise/sunset rendering and
  * staleness checks are meaningless before this. */
 bool net_time_is_valid(void);

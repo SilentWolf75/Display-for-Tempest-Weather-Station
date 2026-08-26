@@ -19,7 +19,16 @@ typedef enum {
     CFG_UNITS_METRIC   = 1,
 } cfg_units_t;
 
+#define CFG_SSID_LEN      33     /* 32 + NUL, per 802.11 */
+#define CFG_PASSWORD_LEN  65     /* 64 + NUL, WPA2 max   */
+
 typedef struct {
+    /* Wi-Fi credentials entered on the settings screen. Kept here rather
+     * than in Kconfig so the network can be changed without a reflash;
+     * secrets.h still seeds them on a first boot. */
+    char        wifi_ssid[CFG_SSID_LEN];
+    char        wifi_password[CFG_PASSWORD_LEN];
+
     cfg_units_t units;
     uint8_t     brightness_day;      /* 5..100 */
     uint8_t     brightness_night;    /* 0..100, 0 = backlight off */
@@ -41,6 +50,13 @@ esp_err_t cfg_set(const cfg_t *in);
 
 /* Restores defaults and persists them. */
 esp_err_t cfg_reset(void);
+
+/* Stores credentials and persists them. Does not reconnect -- call
+ * net_apply_credentials() for that. */
+esp_err_t cfg_set_wifi(const char *ssid, const char *password);
+
+/* True once an SSID has been set, from either NVS or secrets.h. */
+bool cfg_has_wifi(void);
 
 /* True when the local hour falls inside the configured night window.
  * Handles windows that wrap past midnight, which is the normal case. */

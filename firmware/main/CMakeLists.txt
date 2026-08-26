@@ -11,6 +11,7 @@ idf_component_register(
         "ui/wx_icons.c"
         "ui/settings.c"
         "ui/graphs.c"
+        "ui/wifi_setup.c"
         "history.c"
         "config.c"
         "diag.c"

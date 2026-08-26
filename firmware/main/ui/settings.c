@@ -4,6 +4,7 @@
 #include "net.h"
 #include "display.h"
 #include "tempest_udp.h"
+#include "wifi_setup.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -36,6 +37,7 @@ static lv_obj_t *w_night_en;
 static lv_obj_t *w_animate;
 static lv_obj_t *w_windmax, *w_windmax_val;
 static lv_obj_t *w_diag;
+static lv_obj_t *w_wifi_sub;
 
 /* ------------------------------------------------------------------------ */
 
@@ -141,6 +143,12 @@ static void on_windmax(lv_event_t *e)
                           cfg_wind_suffix());
 }
 
+static void on_wifi(lv_event_t *e)
+{
+    (void)e;
+    wifi_setup_show();
+}
+
 static void on_back(lv_event_t *e)
 {
     (void)e;
@@ -207,8 +215,29 @@ esp_err_t settings_init(void)
     lv_obj_center(bl);
 
     /* --- left panel: display --- */
-    lv_obj_t *left = make_panel(s_screen, 24, 84, PANEL_W, 400);
+    lv_obj_t *left = make_panel(s_screen, 24, 84, PANEL_W, 468);
     int y = 0;
+
+    /* Wi-Fi first: it is the setting most likely to be needed, and the only
+     * one that is useless to reach through a reflash. */
+    row_label(left, y, "Wi-Fi");
+    w_wifi_sub = lv_label_create(left);
+    lv_obj_set_style_text_font(w_wifi_sub, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(w_wifi_sub, COL_DIM, 0);
+    lv_label_set_text(w_wifi_sub, "");
+    lv_obj_set_pos(w_wifi_sub, 0, y + 34);
+
+    lv_obj_t *wifi_btn = lv_button_create(left);
+    lv_obj_set_size(wifi_btn, 150, 44);
+    lv_obj_align(wifi_btn, LV_ALIGN_TOP_RIGHT, 0, y + 4);
+    lv_obj_set_style_bg_color(wifi_btn, COL_BG, 0);
+    lv_obj_set_style_radius(wifi_btn, 10, 0);
+    lv_obj_add_event_cb(wifi_btn, on_wifi, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *wl = lv_label_create(wifi_btn);
+    lv_label_set_text(wl, LV_SYMBOL_WIFI "  Set up");
+    lv_obj_set_style_text_font(wl, &lv_font_montserrat_16, 0);
+    lv_obj_center(wl);
+    y += ROW_H + 6;
 
     row_label(left, y, "Units");
     static const char *unit_map[] = { "Imperial", "Metric", "" };
@@ -363,6 +392,18 @@ void settings_tick(void)
 
     wx_state_t s;
     wx_snapshot(&s);
+
+    if (w_wifi_sub) {
+        if (net_is_connected()) {
+            lv_label_set_text_fmt(w_wifi_sub, "connected to %s",
+                                  net_current_ssid());
+        } else if (net_current_ssid()[0]) {
+            lv_label_set_text_fmt(w_wifi_sub, "not connected (%s)",
+                                  net_current_ssid());
+        } else {
+            lv_label_set_text(w_wifi_sub, "not configured");
+        }
+    }
 
     const esp_app_desc_t *app = esp_app_get_description();
     uint32_t up = (uint32_t)(esp_log_timestamp() / 1000);
