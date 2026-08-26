@@ -299,6 +299,14 @@ void wx_update_indoor(const wx_state_t *p)
            sizeof(s_state.thermostat_mode));
     s_state.indoor_fetched_epoch = (int64_t)time(NULL);
     s_state.indoor_valid         = true;
+    s_state.indoor_auth_failed   = false;   /* a good poll clears it */
+    UNLOCK();
+}
+
+void wx_set_indoor_auth_failed(bool failed)
+{
+    LOCK();
+    s_state.indoor_auth_failed = failed;
     UNLOCK();
 }
 

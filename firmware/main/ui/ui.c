@@ -729,7 +729,11 @@ static void update_indoor(const wx_state_t *s, int64_t now)
 {
     if (!s->indoor_valid) {
         lv_label_set_text(in_val, "--");
-        lv_label_set_text(in_state, "no thermostat");
+        lv_label_set_text(in_state, s->indoor_auth_failed ? "REAUTHORIZE"
+                                                          : "no thermostat");
+        lv_obj_set_style_text_color(in_state,
+                                    s->indoor_auth_failed ? COL_ALERT
+                                                          : COL_IDLE, 0);
         lv_label_set_text(in_age, "INDOOR");
         return;
     }
@@ -777,6 +781,15 @@ static void update_indoor(const wx_state_t *s, int64_t now)
      * whether the reading is six minutes or six hours out of date, and this
      * feed is cloud-dependent so it fails on its own while outdoor keeps
      * running from the local UDP broadcast. */
+    /* An expired or revoked token never recovers by waiting, so showing a
+     * climbing age would be misleading -- say what has to happen instead. */
+    if (s->indoor_auth_failed) {
+        lv_obj_set_style_opa(in_cont, LV_OPA_40, 0);
+        lv_label_set_text(in_age, "INDOOR   REAUTHORIZE");
+        lv_obj_set_style_text_color(in_age, COL_ALERT, 0);
+        return;
+    }
+
     if (wx_indoor_is_stale(s)) {
         lv_obj_set_style_opa(in_cont, LV_OPA_40, 0);
         long mins = (long)((now - s->indoor_fetched_epoch) / 60);

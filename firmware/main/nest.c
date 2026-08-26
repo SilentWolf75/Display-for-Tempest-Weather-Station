@@ -158,8 +158,12 @@ static esp_err_t refresh_access_token(void)
             /* Almost always a revoked or mistyped refresh token, and it will
              * never fix itself. Say so instead of retrying forever silently. */
             ESP_LOGE(TAG, "token refresh rejected (HTTP %d).", status);
-            ESP_LOGE(TAG, "the refresh token is invalid or was revoked --");
-            ESP_LOGE(TAG, "re-run the authorisation in docs/nest-api.md.");
+            ESP_LOGE(TAG, "the refresh token is invalid, revoked, or");
+            ESP_LOGE(TAG, "expired. If the Google Cloud app is still in");
+            ESP_LOGE(TAG, "'Testing' publishing status, Google kills");
+            ESP_LOGE(TAG, "refresh tokens after 7 days -- that is the");
+            ESP_LOGE(TAG, "most likely cause. See docs/nest-api.md.");
+            wx_set_indoor_auth_failed(true);
         } else {
             ESP_LOGE(TAG, "token refresh failed: %s, HTTP %d",
                      esp_err_to_name(err), status);

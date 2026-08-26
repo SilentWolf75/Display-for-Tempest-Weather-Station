@@ -50,7 +50,28 @@ consoles label this page **Audience**):
 - **Test users:** add your own Google account.
 - **Then click "Publish app" so the status reads "In production".**
 
-> **DO NOT LEAVE THE APP IN "TESTING".**
+> **Publishing to production is currently blocked by a Google console bug.**
+>
+> The Audience page may refuse to publish with *"Your app's OAuth
+> configuration is incomplete... visit the Branding page"* even when every
+> required field is filled. This is a known, intermittent Google defect --
+> multiple developers have reproduced it from scratch, and deleting the
+> client, renaming the app and recreating the project all fail to fix it.
+> Retrying on another day sometimes works.
+>
+> <https://discuss.google.dev/t/cannot-publish-due-to-error-message-your-apps-oauth-configuration-is-incomplete-you-must-enter-the-missing-information-to-proceed-please-visit-the-branding-page-to-finish-configuring-your-app-even-though-all-required-fields-are-complete/392229>
+>
+> **Testing status still works** -- add yourself under Audience -> Test users.
+> The only cost is that Google expires the refresh token after 7 days, so the
+> indoor tiles stop until you redo step 5. `nest.c` detects the rejection and
+> the indoor gauge shows **REAUTHORIZE** in red rather than a stale age that
+> keeps climbing, because waiting never fixes it.
+>
+> If the weekly re-auth becomes tiresome, the alternative is dropping the Nest
+> for indoor readings and putting an SHT40 or AHT20 on the board's Grove/I2C
+> header: fully local, never expires, but no setpoint or HVAC state.
+
+> **DO NOT LEAVE THE APP IN "TESTING" IF YOU CAN AVOID IT.**
 >
 > Google issues refresh tokens that **expire after 7 days** to external apps
 > with Testing publishing status. The panel would lose indoor data every week

@@ -124,6 +124,12 @@ typedef struct {
     bool     eco_mode;
     int64_t  indoor_fetched_epoch;
     bool     indoor_valid;
+    /* Set when Google rejects the refresh token outright (HTTP 400/401).
+     * Distinct from merely stale: this never recovers on its own, so the
+     * UI must say 'reauthorize' rather than show an age that keeps
+     * climbing. The usual cause is an app left in Testing publishing
+     * status, whose refresh tokens Google expires after 7 days. */
+    bool     indoor_auth_failed;
 
     /* ---- from REST better_forecast ---- */
     char     current_conditions[WX_COND_STR_LEN];
@@ -157,6 +163,7 @@ void wx_update_hub_status(int rssi, uint32_t uptime_s);
 void wx_update_device_status(int rssi, float voltage, uint32_t sensor_status);
 void wx_update_forecast(const wx_state_t *partial);
 void wx_update_indoor(const wx_state_t *partial);
+void wx_set_indoor_auth_failed(bool failed);
 void wx_set_wifi_connected(bool connected);
 void wx_note_udp_packet(void);
 
