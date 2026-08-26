@@ -1,0 +1,31 @@
+## IDF Component Manager manifest.
+## Run `idf.py update-dependencies` to resolve; versions below are deliberately
+## loose because the ESP-Hosted / esp_wifi_remote pair must match whatever slave
+## firmware Elecrow flashed onto the C6. Pin them once the board boots.
+dependencies:
+  idf:
+    version: ">=5.3"
+
+  ## --- Networking: the P4 has no radio; these proxy Wi-Fi to the ESP32-C6 ---
+  espressif/esp_wifi_remote:
+    version: "*"
+  espressif/esp_hosted:
+    version: "*"
+
+  ## --- Display: EK79007 over MIPI-DSI, GT911 touch over I2C ---
+  espressif/esp_lcd_ek79007:
+    version: "*"
+  espressif/esp_lcd_touch_gt911:
+    version: "*"
+
+  ## --- UI ---
+  ## LVGL pinned to the 9.2.x line: that is what SquareLine Studio 1.5.1 emits
+  ## and what the Elecrow examples are written against.
+  lvgl/lvgl:
+    version: "~9.2.2"
+  ## Pinned deliberately. 2.8.0 requires LVGL >= 9.3 (RGB565_SWAPPED) and
+  ## 2.9.0 requires IDF >= 5.6 (the DPI callback was renamed to
+  ## on_frame_buf_complete). 2.7.2 is the last release that builds against
+  ## IDF 5.5.3 + LVGL 9.2.2. Revisit only when moving both forward together.
+  espressif/esp_lvgl_port:
+    version: "~2.7.2"

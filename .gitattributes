@@ -1,0 +1,8 @@
+# Keep LF in the repository. The ESP-IDF toolchain, spiffsgen and the Python
+# tools all read these on Windows without caring, and normalising here stops
+# every file showing as modified after a fresh checkout.
+* text=auto eol=lf
+
+# Generated icon artwork: Lottie JSON from tools/build_icons.py. Committed so a
+# fresh clone builds without network access; regenerate rather than hand-edit.
+firmware/spiffs/icons/*.json linguist-generated=true

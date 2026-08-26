@@ -1,0 +1,77 @@
+menu "Tempest Weather Display"
+
+    config TEMPEST_WIFI_SSID
+        string "Wi-Fi SSID"
+        default "changeme"
+
+    config TEMPEST_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default "changeme"
+
+    config TEMPEST_STATION_ID
+        int "Tempest station ID"
+        default 230728
+        help
+            Used for the REST forecast poll. Find it in the tempestwx.com URL.
+
+    config TEMPEST_UDP_PORT
+        int "Tempest hub UDP broadcast port"
+        default 50222
+        help
+            The hub broadcasts unauthenticated JSON here. Do not change unless
+            WeatherFlow does.
+
+    config TEMPEST_FORECAST_INTERVAL_S
+        int "Forecast poll interval (seconds)"
+        default 600
+        help
+            Live values come from UDP, so there is no reason to poll fast.
+            WeatherFlow publishes no rate limit; 10 minutes is a courtesy budget.
+
+    config TEMPEST_OBS_STALE_S
+        int "Observation staleness threshold (seconds)"
+        default 180
+        help
+            obs_st arrives every 60 s. If none has arrived for this long the UI
+            marks the reading degraded.
+
+    config NEST_POLL_INTERVAL_S
+        int "Nest poll interval (seconds)"
+        default 300
+        help
+            Indoor temperature moves slowly and the SDM API is rate limited,
+            so 5 minutes is plenty. Do not drop below 60.
+
+    config NEST_STALE_S
+        int "Nest staleness threshold (seconds)"
+        default 1800
+        help
+            The Nest feed is cloud-dependent and fails independently of the
+            local Tempest feed. Past this age the indoor tiles are dimmed.
+
+    config OTA_ENABLED
+        bool "Enable over-the-air updates"
+        default y
+        help
+            Serves a firmware upload page on port 80. Worth having on a panel
+            that is going to live on a wall.
+
+    config OTA_PASSWORD
+        string "OTA shared secret (X-OTA-Password header)"
+        default ""
+        depends on OTA_ENABLED
+        help
+            Required in the X-OTA-Password header for uploads. LEAVING THIS
+            EMPTY means anyone who can reach the device on your network can
+            reflash it. There is no TLS either way -- this is a LAN-only
+            convenience, not a security boundary.
+
+    config DIAG_ON_BOOT
+        bool "Run bring-up diagnostics at boot"
+        default y
+        help
+            Logs chip info, partition layout, reset reason and an I2C bus scan
+            before the display initialises. Keep this on until board_pins.h is
+            verified against real hardware.
+
+endmenu

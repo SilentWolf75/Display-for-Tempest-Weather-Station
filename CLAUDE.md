@@ -1,0 +1,139 @@
+# Tempest Weather Display — working notes
+
+## What this is
+
+Standalone ESP-IDF firmware for an Elecrow CrowPanel Advance 10.1" (ESP32-P4)
+that renders a WeatherFlow Tempest station on a 1024x600 panel. No Home
+Assistant. Live data from the hub's local UDP broadcast; forecast from the
+Tempest REST API.
+
+## Decisions already made — do not relitigate
+
+- **ESP-IDF + LVGL in C**, not ESPHome and not Arduino. Chosen because Elecrow's
+  own docs and the Mjrovai lessons are ESP-IDF, so the gotchas are documented.
+- **Local UDP is the primary data source.** REST is forecast-only. The
+  WebSocket API is the designated fallback if broadcast fails, not a default.
+- **No Home Assistant dependency**, even though one could exist on the network.
+- **The partition table is OTA-capable and lives at 0xA000**, not the 0x8000
+  default: the OTA bootloader grew to within 256 bytes of the default budget.
+  Two 3 MB app slots, which must always be resized together. Rollback is armed,
+  and `ota_mark_valid()` is called late in `app_main` on purpose -- an image
+  that cannot boot far enough to render reverts itself.
+- **Settings are runtime, in NVS** (`config.c`), not Kconfig. The old
+  `TEMPEST_UNITS` choice was deleted -- a settings screen that needs a reflash
+  is not a settings screen. `U_TEMP` and friends in `ui.c` kept their spelling
+  but now expand to `cfg_*()` calls, so the `*_SUF` macros are function calls
+  and can no longer be string-concatenated into a format literal. Use `%s`.
+- **Anything cumulative is accumulated on-device** in `wx_state.c`: rain since
+  local midnight, observed daily hi/lo, a 3-hour pressure-sample ring buffer,
+  and a windowed lightning count. The UDP feed carries instantaneous readings
+  only, so none of this can be read straight off the wire.
+- `wx_state` holds **SI units only**. Convert in the UI at render time. This is
+  load-bearing: it keeps the units toggle trivial and keeps ingest swappable.
+
+## Hard-won facts
+
+- The **ESP32-P4 has no radio.** Wi-Fi is proxied to an ESP32-C6 over SDIO via
+  ESP-Hosted / `esp_wifi_remote`. If `esp_wifi_init()` fails, it is a C6
+  firmware/component version mismatch, not application code.
+- **UDP broadcast through ESP-Hosted is the project's biggest unknown.** Prove
+  it before building anything on top of it. `main.c` logs a warning every 30 s
+  if packets stop arriving while Wi-Fi is up.
+- **Every LVGL call from outside an LVGL callback must be wrapped** in
+  `display_lock()` / `display_unlock()`. Unlocked calls hang the panel rather
+  than crashing, so the symptom is confusing.
+- Panel is **EK79007 over MIPI-DSI**; touch is **GT911** on I2C GPIO 7/8. The
+  I2C bus is shared, so do not assume exclusive access.
+- Power the board from a **5 V/2 A external supply** when flashing. PC USB ports
+  brown out and it looks like a flashing failure.
+- **`esp_lvgl_port` is pinned to `~2.7.2` on purpose.** Its manifest claims
+  `lvgl >=8,<10` and `idf >=5.2`, both of which are wrong for newer releases:
+  2.8.0 uses `LV_COLOR_FORMAT_RGB565_SWAPPED` (needs LVGL >= 9.3) and 2.9.0 uses
+  the renamed DPI callback `on_frame_buf_complete` (needs IDF >= 5.6; IDF 5.5.3
+  only has `on_color_trans_done` / `on_refresh_done`). The dependency solver
+  will happily pick 2.9.0 and then fail to compile inside the component itself,
+  which looks like a broken toolchain rather than a version conflict. Only
+  unpin when moving IDF and LVGL forward together.
+- The EK79007 config macro is `EK79007_1024_600_PANEL_60HZ_CONFIG(px_format)`
+  for IDF < 6.0 (there is a separate `..._CONFIG_CF` variant for IDF 6). It sets
+  the DSI lane rate to 900 Mbps and the DPI clock to 52 MHz.
+- **Creating `secrets.h` does not trigger a rebuild.** Both `tempest_rest.c`
+  and `nest.c` gate on `__has_include("secrets.h")`, and ninja has no recorded
+  dependency on a file that did not exist at the last compile. The build
+  succeeds, the binary is byte-identical, and the credentials are silently
+  absent. After creating or first populating `secrets.h`, touch the two files
+  (or `idf.py fullclean`). The tell is binary size: with credentials present
+  the app is ~1.62 MB, without them ~1.30 MB.
+- **Weather icons are Meteocons Lottie files rendered by ThorVG**, not a font.
+  LVGL fonts are single-colour alpha masks and cannot be "realistic". See
+  [docs/icons.md](docs/icons.md). Assets live on the SPIFFS `storage`
+  partition, built by `python tools/build_icons.py`.
+- **Enabling `CONFIG_LV_USE_LOTTIE` looks almost free until you use it.**
+  `--gc-sections` strips ThorVG while nothing references it, so the binary grows
+  only ~92 KB. Creating one widget pulls in the real 423 KB. Never judge the
+  cost of an optional LVGL feature from a build that does not call it.
+- **SPIFFS object names default to 32 chars**; the icon paths need
+  `CONFIG_SPIFFS_OBJ_NAME_LEN=64`. Keep the icon download cache OUT of
+  `firmware/spiffs/` -- that whole directory is baked into a 2 MB partition and
+  the tarball alone is 3 MB.
+- LVGL fonts are opt-in per size. Referencing `lv_font_montserrat_NN` in `ui.c`
+  without a matching `CONFIG_LV_FONT_MONTSERRAT_NN=y` in `sdkconfig.defaults`
+  fails as "undeclared identifier", which reads like a typo but is not.
+
+## Indoor data comes from a Nest, not a sensor
+
+The Tempest is outdoor-only. Indoor temperature, humidity, setpoint and HVAC
+state come from a **Nest Learning Thermostat 4th gen** over Google's Smart
+Device Management API — see [docs/nest-api.md](docs/nest-api.md).
+
+Consequences that shape the code:
+
+- **It is cloud-only.** Modern Nest hardware has no local API, so unlike the
+  Tempest this stops working when the internet does. `wx_indoor_is_stale()` is
+  deliberately separate from `wx_obs_is_stale()` so the UI can age the two
+  halves independently — losing the internet must never blank the outdoor side.
+- OAuth refresh-token flow. Authorise once in a browser on a PC, paste the
+  refresh token into `secrets.h`; the device exchanges it for 1-hour access
+  tokens forever. Token expiry is timed on `esp_timer_get_time()` (monotonic)
+  on purpose, so it does not depend on SNTP.
+- Google refresh tokens start `1//` and **contain slashes**, which must be
+  percent-encoded before going into a form body. That is why `url_encode()`
+  exists in `nest.c`; without it the exchange fails with a misleading
+  `invalid_grant`.
+- 4th gen support rests on Google's blanket "all Nest thermostat models are
+  supported" statement, not a model list. **Unverified against real hardware** —
+  step 5 of the setup doc is the test.
+- Matter would have been local, but the C6 is occupied as the P4's Wi-Fi radio.
+
+## Verified live data (2026-08-26)
+
+`tools/tempest_listen.py` captured the real station from this machine:
+hub `HB-00221923` fw 343, sensor `ST-00221238`, `sensor_status 0x0`,
+battery 2.647 V, 1-minute report interval, all 18 `obs_st` fields present and in
+spec order. The Python decoder is the reference the C parser mirrors — if they
+ever disagree, the Python one was validated against real traffic.
+
+## Unverified — do not trust
+
+`firmware/main/board_pins.h`. Only I2C GPIO 7/8 is sourced. Backlight pin, panel
+reset, touch INT/RST and all MIPI-DSI timings are placeholders. `display.c`
+deliberately uses the `esp_lcd_ek79007` component's own config macros instead of
+hand-entered timings. Verify against the Elecrow schematic and their V1.1/V1.2
+example before driving pins, then define `BOARD_PINS_VERIFIED`.
+
+Nothing in `firmware/` has been compiled against real hardware yet.
+
+## Build
+
+ESP-IDF v5.5.3 at `C:\esp\v5.5.3\esp-idf`, toolchain riscv32-esp-elf 14.2.0.
+Activate with `C:\Espressif\tools\Microsoft.v5.5.3.PowerShell_profile.ps1`,
+then `idf.py set-target esp32p4 && idf.py build` from `firmware/`.
+
+`main/secrets.h` is gitignored and holds the Tempest API token. Copy it from
+`main/secrets.h.example`.
+
+## Style
+
+Match the existing code: 4-space indent, Allman-free K&R braces, `s_` prefix for
+file-static state, comments that explain *why* rather than restating the call.
+Log messages are lowercase and specific.

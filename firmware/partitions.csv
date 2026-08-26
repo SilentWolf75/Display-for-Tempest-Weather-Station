@@ -1,0 +1,18 @@
+# OTA-capable layout for 16 MB flash.
+#
+# Two app slots so the panel can be updated over the network without coming off
+# the wall, and so a bad image rolls back instead of bricking. The app is
+# ~1.9 MB today; 3 MB per slot leaves generous room for the vector engine to
+# grow. The 2 MB storage partition holds the Lottie weather icons.
+#
+# App partitions must be 64K-aligned, which is why ota_0 starts at 0x20000.
+# The table itself lives at 0xA000 (not the 0x8000 default) so the
+# OTA-capable bootloader has room -- see sdkconfig.defaults.
+#
+# Name,     Type, SubType,  Offset,   Size,  Flags
+nvs,        data, nvs,      0xB000,   24K,
+otadata,    data, ota,      0x11000,  8K,
+phy_init,   data, phy,      0x13000,  4K,
+ota_0,      app,  ota_0,    0x20000,  3M,
+ota_1,      app,  ota_1,    ,         3M,
+storage,    data, spiffs,   ,         2M,
