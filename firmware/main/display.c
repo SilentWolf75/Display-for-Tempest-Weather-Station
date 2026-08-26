@@ -19,10 +19,9 @@ static const char *TAG = "display";
  * wind dial animation. */
 #define LCD_BIT_PER_PIXEL       16
 #define LVGL_BUF_HEIGHT         (BOARD_LCD_V_RES / 10)
-/* 16 KB. Building a screenful of widgets in one tick -- a scanned network
- * list, for instance -- goes several layout passes deep, and 8 KB left no
- * useful margin. */
-#define LVGL_TASK_STACK         16384
+/* 64 KB. Building a screenful of widgets and parsing ThorVG/Lottie vector
+ * animations requires ample stack margin for deep recursive JSON/Bezier parsing. */
+#define LVGL_TASK_STACK         65536
 #define LVGL_TASK_PRIORITY      2
 
 #define BACKLIGHT_LEDC_TIMER    LEDC_TIMER_0

@@ -23,3 +23,7 @@ __pycache__/
 
 # Icon build cache (3 MB tarball, re-downloadable)
 .cache/
+
+# 3D print renders and exports are regenerated from the .scad
+case/*.png
+case/*.stl
