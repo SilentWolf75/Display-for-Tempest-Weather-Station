@@ -2,24 +2,17 @@
 /*
  * Indoor temperature and humidity from a local I2C sensor.
  *
- * This replaces the Nest/SDM path for the indoor half of the display. The Nest
- * would have given setpoint and HVAC state too, but reaching it requires a paid
- * Google Device Access project, an OAuth client, and a consent screen that
- * Google's own console currently refuses to publish -- after which the refresh
- * token expires weekly. For "what is the temperature in here", a $3 part on the
- * Grove header is the better engineering trade by a wide margin:
+ * The Tempest is an outdoor station, so indoor readings need their own source.
+ * A $3 part on the Grove header:
  *
  *   - no account, no tokens, nothing to expire
- *   - works with the internet down, like the rest of the outdoor half
+ *   - works with the internet down, like the local UDP feed
  *   - one wire, no soldering
  *
  * Supports AHT20/DHT20 (address 0x38) and SHT4x (0x44). Both are probed at
  * startup and whichever answers is used, so either part works without a
  * rebuild. The DHT20 is the one Elecrow sells for this board's Grove
  * connector.
- *
- * nest.c stays in the tree, selectable via CONFIG_INDOOR_SOURCE_NEST, in case
- * Google ever fixes publishing.
  */
 
 #include <stdbool.h>

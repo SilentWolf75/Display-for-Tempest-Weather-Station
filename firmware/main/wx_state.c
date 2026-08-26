@@ -289,24 +289,10 @@ void wx_update_forecast(const wx_state_t *p)
 void wx_update_indoor(const wx_state_t *p)
 {
     LOCK();
-    s_state.indoor_temp_c       = p->indoor_temp_c;
-    s_state.indoor_humidity_pct = p->indoor_humidity_pct;
-    s_state.setpoint_heat_c     = p->setpoint_heat_c;
-    s_state.setpoint_cool_c     = p->setpoint_cool_c;
-    s_state.eco_mode            = p->eco_mode;
-    memcpy(s_state.hvac_status, p->hvac_status, sizeof(s_state.hvac_status));
-    memcpy(s_state.thermostat_mode, p->thermostat_mode,
-           sizeof(s_state.thermostat_mode));
+    s_state.indoor_temp_c        = p->indoor_temp_c;
+    s_state.indoor_humidity_pct  = p->indoor_humidity_pct;
     s_state.indoor_fetched_epoch = (int64_t)time(NULL);
     s_state.indoor_valid         = true;
-    s_state.indoor_auth_failed   = false;   /* a good poll clears it */
-    UNLOCK();
-}
-
-void wx_set_indoor_auth_failed(bool failed)
-{
-    LOCK();
-    s_state.indoor_auth_failed = failed;
     UNLOCK();
 }
 
@@ -348,7 +334,7 @@ bool wx_indoor_is_stale(const wx_state_t *s)
     if (now < 1600000000LL) {
         return false;       /* clock not set yet; see wx_obs_is_stale */
     }
-    return (now - s->indoor_fetched_epoch) > CONFIG_NEST_STALE_S;
+    return (now - s->indoor_fetched_epoch) > CONFIG_INDOOR_STALE_S;
 }
 
 /* --------------------------------------------------------------------------

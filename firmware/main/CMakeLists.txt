@@ -5,7 +5,6 @@ idf_component_register(
         "tempest_udp.c"
         "tempest_rest.c"
         "net.c"
-        "nest.c"
         "indoor.c"
         "display.c"
         "ui/ui.c"

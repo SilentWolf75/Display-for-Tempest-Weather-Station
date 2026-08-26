@@ -35,45 +35,19 @@ menu "Tempest Weather Display"
             obs_st arrives every 60 s. If none has arrived for this long the UI
             marks the reading degraded.
 
-    choice INDOOR_SOURCE
-        prompt "Indoor temperature source"
-        default INDOOR_SOURCE_I2C
-        help
-            The Tempest is an outdoor station, so indoor readings need a
-            second source. The local I2C sensor needs no account and never
-            expires; the Nest additionally reports setpoint and HVAC state
-            but requires a paid Google Device Access project and weekly
-            reauthorisation while Google's console cannot publish the app.
-
-        config INDOOR_SOURCE_I2C
-            bool "Local I2C sensor (AHT20/DHT20 or SHT4x)"
-        config INDOOR_SOURCE_NEST
-            bool "Nest thermostat via the Google SDM API"
-        config INDOOR_SOURCE_NONE
-            bool "None -- outdoor only"
-    endchoice
-
     config INDOOR_POLL_INTERVAL_S
         int "Indoor sensor poll interval (seconds)"
         default 30
-        depends on INDOOR_SOURCE_I2C
         help
             Indoor temperature moves slowly. 30 s is already generous.
 
-    config NEST_POLL_INTERVAL_S
-        int "Nest poll interval (seconds)"
-        default 300
-        depends on INDOOR_SOURCE_NEST
-        help
-            Indoor temperature moves slowly and the SDM API is rate limited,
-            so 5 minutes is plenty. Do not drop below 60.
-
-    config NEST_STALE_S
-        int "Nest staleness threshold (seconds)"
+    config INDOOR_STALE_S
+        int "Indoor staleness threshold (seconds)"
         default 1800
         help
-            The Nest feed is cloud-dependent and fails independently of the
-            local Tempest feed. Past this age the indoor tiles are dimmed.
+            Past this age the indoor gauge dims and shows how old the reading
+            is. A sensor that has been unplugged should look obviously wrong
+            rather than quietly frozen.
 
     config OTA_ENABLED
         bool "Enable over-the-air updates"

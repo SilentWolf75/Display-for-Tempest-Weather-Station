@@ -57,13 +57,13 @@ Tempest REST API.
 - The EK79007 config macro is `EK79007_1024_600_PANEL_60HZ_CONFIG(px_format)`
   for IDF < 6.0 (there is a separate `..._CONFIG_CF` variant for IDF 6). It sets
   the DSI lane rate to 900 Mbps and the DPI clock to 52 MHz.
-- **Creating `secrets.h` does not trigger a rebuild.** Both `tempest_rest.c`
-  and `nest.c` gate on `__has_include("secrets.h")`, and ninja has no recorded
+- **Creating `secrets.h` does not trigger a rebuild.** `tempest_rest.c` gates
+  on `__has_include("secrets.h")`, and ninja has no recorded
   dependency on a file that did not exist at the last compile. The build
   succeeds, the binary is byte-identical, and the credentials are silently
   absent. After creating or first populating `secrets.h`, touch the two files
   (or `idf.py fullclean`). The tell is binary size: with credentials present
-  the app is ~1.62 MB, without them ~1.30 MB.
+  the app is ~300 KB larger than without.
 - **Weather icons are Meteocons Lottie files rendered by ThorVG**, not a font.
   LVGL fonts are single-colour alpha masks and cannot be "realistic". See
   [docs/icons.md](docs/icons.md). Assets live on the SPIFFS `storage`
@@ -80,30 +80,24 @@ Tempest REST API.
   without a matching `CONFIG_LV_FONT_MONTSERRAT_NN=y` in `sdkconfig.defaults`
   fails as "undeclared identifier", which reads like a typo but is not.
 
-## Indoor data comes from a Nest, not a sensor
+## Indoor data comes from a local sensor
 
-The Tempest is outdoor-only. Indoor temperature, humidity, setpoint and HVAC
-state come from a **Nest Learning Thermostat 4th gen** over Google's Smart
-Device Management API — see [docs/nest-api.md](docs/nest-api.md).
+The Tempest is outdoor-only. Indoor temperature and humidity come from an
+AHT20/DHT20 (0x38) or SHT4x (0x44) on the Grove/I2C header -- see
+[docs/indoor.md](docs/indoor.md).
 
-Consequences that shape the code:
+A Nest/SDM integration was built and then removed. Recorded so it is not
+rebuilt by accident: modern Nest hardware has no local API, access needs a paid
+Google Device Access project plus an OAuth consent screen that Google's own
+console currently cannot publish, and an unpublished app's refresh tokens
+expire every 7 days. For "what is the temperature in here", a $3 part that
+never expires wins outright. `git log` has the implementation if it is ever
+wanted back.
 
-- **It is cloud-only.** Modern Nest hardware has no local API, so unlike the
-  Tempest this stops working when the internet does. `wx_indoor_is_stale()` is
-  deliberately separate from `wx_obs_is_stale()` so the UI can age the two
-  halves independently — losing the internet must never blank the outdoor side.
-- OAuth refresh-token flow. Authorise once in a browser on a PC, paste the
-  refresh token into `secrets.h`; the device exchanges it for 1-hour access
-  tokens forever. Token expiry is timed on `esp_timer_get_time()` (monotonic)
-  on purpose, so it does not depend on SNTP.
-- Google refresh tokens start `1//` and **contain slashes**, which must be
-  percent-encoded before going into a form body. That is why `url_encode()`
-  exists in `nest.c`; without it the exchange fails with a misleading
-  `invalid_grant`.
-- 4th gen support rests on Google's blanket "all Nest thermostat models are
-  supported" statement, not a model list. **Unverified against real hardware** —
-  step 5 of the setup doc is the test.
-- Matter would have been local, but the C6 is occupied as the P4's Wi-Fi radio.
+`indoor.c` shares the I2C bus the touch controller owns via
+`display_get_i2c_bus()` rather than creating a second master on the same pins,
+and discards readings outside -20..70 C -- a sensor that comes loose returns
+garbage rather than an error.
 
 ## Verified live data (2026-08-26)
 

@@ -170,9 +170,8 @@ static void indoor_task(void *arg)
                 wx_state_t p = {0};
                 p.indoor_temp_c       = t;
                 p.indoor_humidity_pct = h;
-                /* No thermostat_mode or hvac_status: this is a bare sensor,
-                 * and the UI keys off the empty mode to hide the setpoint and
-                 * HVAC rows rather than inventing them. */
+                /* Temperature and humidity only -- that is the whole
+                 * requirement, and the UI shows nothing it cannot measure. */
                 wx_update_indoor(&p);
             } else {
                 ESP_LOGW(TAG, "implausible reading %.1fC %.0f%%, ignoring",

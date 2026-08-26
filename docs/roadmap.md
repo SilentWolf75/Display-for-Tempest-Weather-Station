@@ -57,7 +57,6 @@ The abstraction in `wx_state` means swapping ingest does not touch the UI.
 ## Milestone 4 — UI  (first pass written, compiles clean)
 
 Gauge-based layout, 1024x600 landscape. Three rings across the top -- outdoor
-temperature, wind compass, indoor (Nest) -- then four accent-barred metric
 cards, then a seven-day forecast strip.
 
 Implementation notes worth keeping:
@@ -66,9 +65,6 @@ Implementation notes worth keeping:
   gradient along an arc. `make_graded_scale()` stacks five `lv_arc`s sharing a
   centre, each covering one 54-degree slice, with a position knob on top. The
   commercial consoles do the same thing.
-- **HVAC state drives colour** on the indoor ring, knob and status label:
-  amber heating, cyan cooling, slate idle. Colour carries the state so it reads
-  from across the room without being parsed.
 - **Stale indoor dims to 40% AND states its age.** Dimming alone hides whether
   a reading is six minutes or six hours old, and this feed is cloud-dependent
   so it fails while the outdoor half keeps running.

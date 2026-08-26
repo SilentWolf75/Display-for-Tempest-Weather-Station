@@ -36,9 +36,6 @@ static const char *TAG = "ui";
 #define COL_ALERT     lv_color_hex(0xEF5350)
 #define COL_OK        lv_color_hex(0x66BB6A)
 
-/* HVAC state colours -- the whole point of the indoor ring. */
-#define COL_HEATING   lv_color_hex(0xFF8A3D)
-#define COL_COOLING   lv_color_hex(0x4FC3F7)
 #define COL_IDLE      lv_color_hex(0x5C6B7A)
 
 /* ---- geometry ----------------------------------------------------------- */
@@ -108,8 +105,7 @@ static lv_obj_t *temp_knob, *temp_val, *temp_feels, *temp_hilo;
 static lv_obj_t *wind_arc, *wind_needle, *wind_val, *wind_dir, *wind_gust;
 static lv_point_precise_t needle_pts[2];
 
-static lv_obj_t *in_cont, *in_arc, *in_knob, *in_val, *in_hum;
-static lv_obj_t *in_state, *in_setpoint, *in_age;
+static lv_obj_t *in_cont, *in_arc, *in_knob, *in_val, *in_hum, *in_age;
 
 typedef struct { lv_obj_t *value; lv_obj_t *sub; lv_obj_t *unit; } card_t;
 static card_t cards[4];
@@ -369,7 +365,7 @@ static void build_gauges(lv_obj_t *scr)
                        COL_WIND, "");
     clabel(p, G2_CX, G_CY + 110, 220, &lv_font_montserrat_14, COL_DIM, "WIND");
 
-    /* --- indoor: the Nest. Wrapped in its own container so staleness can dim
+    /* --- indoor: local sensor. Wrapped in its own container so staleness dims
      * the whole group in one call without touching the outdoor half. --- */
     in_cont = lv_obj_create(p);
     lv_obj_set_pos(in_cont, G3_CX - IN_CX, 0);
@@ -379,18 +375,14 @@ static void build_gauges(lv_obj_t *scr)
     lv_obj_set_style_pad_all(in_cont, 0, 0);
     lv_obj_clear_flag(in_cont, LV_OBJ_FLAG_SCROLLABLE);
 
-    in_arc  = make_ring(in_cont, IN_CX, G_CY, COL_IDLE, false);
-    in_knob = make_knob(in_cont, COL_IDLE);
+    in_arc  = make_ring(in_cont, IN_CX, G_CY, COL_HUMID, false);
+    in_knob = make_knob(in_cont, COL_HUMID);
     place_knob(in_knob, IN_CX, G_CY, 0.0f);
 
     in_val      = clabel(in_cont, IN_CX, G_CY - 34, 250,
                          &lv_font_montserrat_48, COL_TEXT, "--");
     in_hum      = clabel(in_cont, IN_CX, G_CY + 24, 250,
                          &lv_font_montserrat_18, COL_HUMID, "");
-    in_setpoint = clabel(in_cont, IN_CX, G_CY + 48, 250,
-                         &lv_font_montserrat_14, COL_DIM, "");
-    in_state    = clabel(in_cont, IN_CX, G_CY + 86, 250,
-                         &lv_font_montserrat_16, COL_IDLE, "");
     in_age      = clabel(in_cont, IN_CX, G_CY + 110, 250,
                          &lv_font_montserrat_14, COL_DIM, "INDOOR");
 }
@@ -716,37 +708,15 @@ static void update_outdoor(const wx_state_t *s)
              (double)s->solar_radiation_wm2);
 }
 
-/* HVAC state is the whole reason the indoor ring exists: colour carries the
- * information so it reads from across the room without being parsed. */
-static lv_color_t hvac_colour(const wx_state_t *s)
-{
-    if (strcmp(s->hvac_status, "HEATING") == 0) return COL_HEATING;
-    if (strcmp(s->hvac_status, "COOLING") == 0) return COL_COOLING;
-    return COL_IDLE;
-}
-
 static void update_indoor(const wx_state_t *s, int64_t now)
 {
     if (!s->indoor_valid) {
         lv_label_set_text(in_val, "--");
-        lv_label_set_text(in_state, s->indoor_auth_failed ? "REAUTHORIZE"
-                                                          : "no sensor");
-        lv_obj_set_style_text_color(in_state,
-                                    s->indoor_auth_failed ? COL_ALERT
-                                                          : COL_IDLE, 0);
-        lv_label_set_text(in_age, "INDOOR");
+        lv_label_set_text(in_hum, "");
+        lv_label_set_text(in_age, "INDOOR   no sensor");
+        lv_obj_set_style_text_color(in_age, COL_DIM, 0);
         return;
     }
-
-    /* A bare I2C sensor reports temperature and humidity and nothing else.
-     * Rather than invent an HVAC state, key off the empty mode string and
-     * drop those rows entirely. */
-    bool has_hvac = s->thermostat_mode[0] != '\0';
-
-    lv_color_t col = has_hvac ? hvac_colour(s) : COL_HUMID;
-    lv_obj_set_style_arc_color(in_arc, col, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(in_knob, col, 0);
-    lv_obj_set_style_text_color(in_state, col, 0);
 
     set_text(in_val, "%.1f", (double)U_TEMP(s->indoor_temp_c));
     set_text(in_hum, "%.0f%% humidity", (double)s->indoor_humidity_pct);
@@ -755,52 +725,10 @@ static void update_indoor(const wx_state_t *s, int64_t now)
     lv_arc_set_value(in_arc, (int32_t)(f * 1000.0f));
     place_knob(in_knob, IN_CX, G_CY, f);
 
-    if (!has_hvac) {
-        lv_label_set_text(in_setpoint, "");
-        lv_label_set_text(in_state, "");
-    } else
-    /* Only the setpoint matching the active mode is populated, so branch on
-     * the mode rather than testing a setpoint for non-zero -- an Eco or OFF
-     * thermostat would otherwise read as 0 degrees. */
-    if (strcmp(s->thermostat_mode, "HEAT") == 0) {
-        set_text(in_setpoint, "set to %.0f%s",
-                 (double)U_TEMP(s->setpoint_heat_c), U_TEMP_SUF);
-    } else if (strcmp(s->thermostat_mode, "COOL") == 0) {
-        set_text(in_setpoint, "set to %.0f%s",
-                 (double)U_TEMP(s->setpoint_cool_c), U_TEMP_SUF);
-    } else if (strcmp(s->thermostat_mode, "HEATCOOL") == 0) {
-        set_text(in_setpoint, "%.0f - %.0f%s",
-                 (double)U_TEMP(s->setpoint_heat_c),
-                 (double)U_TEMP(s->setpoint_cool_c), U_TEMP_SUF);
-    } else {
-        lv_label_set_text(in_setpoint, "thermostat off");
-    }
-
-    if (!has_hvac) {
-        /* nothing to say */
-    } else if (s->eco_mode) {
-        lv_label_set_text(in_state, "ECO");
-    } else if (strcmp(s->hvac_status, "HEATING") == 0) {
-        lv_label_set_text(in_state, "HEATING");
-    } else if (strcmp(s->hvac_status, "COOLING") == 0) {
-        lv_label_set_text(in_state, "COOLING");
-    } else {
-        lv_label_set_text(in_state, "IDLE");
-    }
-
     /* Stale handling: dim the group AND say how old it is. Dimming alone hides
-     * whether the reading is six minutes or six hours out of date, and this
-     * feed is cloud-dependent so it fails on its own while outdoor keeps
-     * running from the local UDP broadcast. */
-    /* An expired or revoked token never recovers by waiting, so showing a
-     * climbing age would be misleading -- say what has to happen instead. */
-    if (s->indoor_auth_failed) {
-        lv_obj_set_style_opa(in_cont, LV_OPA_40, 0);
-        lv_label_set_text(in_age, "INDOOR   REAUTHORIZE");
-        lv_obj_set_style_text_color(in_age, COL_ALERT, 0);
-        return;
-    }
-
+     * whether the reading is six minutes or six hours out of date, and an
+     * unplugged sensor should look obviously wrong rather than quietly
+     * frozen at its last value. */
     if (wx_indoor_is_stale(s)) {
         lv_obj_set_style_opa(in_cont, LV_OPA_40, 0);
         long mins = (long)((now - s->indoor_fetched_epoch) / 60);

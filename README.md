@@ -8,14 +8,12 @@ listens directly to the Tempest hub's UDP broadcasts on the LAN and only reaches
 out to the internet for the forecast.
 
 Indoor temperature comes from a **$3 I2C sensor on the Grove header** (AHT20 /
-DHT20 or SHT4x), since the Tempest is an outdoor-only station. A Nest/SDM path
-also exists but is not the default — see [docs/indoor.md](docs/indoor.md) for
-why.
+DHT20 or SHT4x), since the Tempest is an outdoor-only station.
 
 - **Station:** 230728 (hub `HB-00221923`, sensor `ST-00221238`)
 - **Hardware:** [docs/hardware.md](docs/hardware.md)
 - **Outdoor data:** [docs/tempest-api.md](docs/tempest-api.md)
-- **Indoor data:** [docs/indoor.md](docs/indoor.md) (Nest alternative: [docs/nest-api.md](docs/nest-api.md))
+- **Indoor data:** [docs/indoor.md](docs/indoor.md)
 - **Weather icons:** [docs/icons.md](docs/icons.md)
 - **Bring-up checklist:** [docs/bringup.md](docs/bringup.md) — start here when the panel arrives
 - **Plan and status:** [docs/roadmap.md](docs/roadmap.md)
@@ -23,15 +21,15 @@ why.
 ## Architecture
 
 ```
-  Tempest hub          swd.weatherflow.com     Google SDM API
-   (your LAN)               (cloud)                (cloud)
-       |                       |                      |
-       | UDP 50222             | HTTPS / 10 min       | HTTPS / 5 min
-       | broadcast             | better_forecast      | OAuth + traits
-       | obs_st 60s            |                      |
-       | rapid_wind 3s         |                      |
-       v                       v                      v
-  tempest_udp.c ------> wx_state.c (mutex) <---- nest.c
+  Tempest hub          swd.weatherflow.com      I2C sensor
+   (your LAN)               (cloud)            (Grove header)
+       |                       |                     |
+       | UDP 50222             | HTTPS / 10 min      | every 30 s
+       | broadcast             | better_forecast     | AHT20 or SHT4x
+       | obs_st 60s            | + 24h backfill      |
+       | rapid_wind 3s         |                     |
+       v                       v                     v
+  tempest_udp.c ------> wx_state.c (mutex) <---- indoor.c
                              ^
                              |
                        tempest_rest.c
@@ -45,9 +43,9 @@ why.
             EK79007 / MIPI-DSI  +  GT911 / I2C
 ```
 
-The three feeds fail independently on purpose. Only the leftmost one is local:
-if the internet drops, the outdoor readings keep updating while the forecast and
-indoor tiles age out and are marked stale.
+Only the forecast needs the internet. If it drops, the outdoor readings keep
+arriving over the LAN and the indoor sensor keeps reading — the forecast strip
+is the only thing that ages out.
 
 `wx_state` holds SI units exclusively. Unit conversion happens in `ui.c` at
 render time, which is what keeps the imperial/metric switch a one-line change.
@@ -68,7 +66,6 @@ without the UI noticing.
 | Correctness pass | **done** — rain/pressure/hi-lo/UV bugs fixed |
 | Hardware readiness | **done** — I2C scanner, boot diagnostics, OTA + rollback |
 | 24-hour trend graphs | **done** — local history + REST backfill at boot |
-| Nest indoor feed | written, **compiles clean**, needs $5 Device Access setup |
 
 `firmware/` builds clean for `esp32p4` on ESP-IDF v5.5.3 — **2.04 MB app**
 (ThorVG's vector engine is 423 KB of that) plus **416 KB of icon artwork** on
@@ -109,8 +106,7 @@ Then configure credentials and build:
 cd firmware && cp main/secrets.h.example main/secrets.h
 ```
 
-Put your Tempest token and, optionally, your Nest OAuth credentials in
-`main/secrets.h` — see [docs/nest-api.md](docs/nest-api.md) for the Nest setup.
+Put your Tempest personal access token in `main/secrets.h`.
 Set the Wi-Fi SSID and password under `idf.py menuconfig` -> "Tempest Weather
 Display", then:
 
@@ -145,8 +141,7 @@ firmware/      ESP-IDF project
     tempest_udp.[ch]  hub broadcast listener + JSON decode
     tempest_rest.[ch] better_forecast poller over TLS
     net.[ch]          Wi-Fi via esp_wifi_remote, SNTP
-    indoor.[ch]       local I2C temp/humidity sensor (the default)
-    nest.[ch]         Nest over OAuth + SDM (optional alternative)
+    indoor.[ch]       local I2C temp/humidity sensor (AHT20/DHT20 or SHT4x)
     display.[ch]      EK79007 + GT911 + LVGL bring-up
     board_pins.h      pin map — UNVERIFIED, read the header
     ui/ui.c           the screen: rings, cards, forecast strip

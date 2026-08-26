@@ -1,62 +1,54 @@
 # Indoor temperature
 
 The Tempest is an outdoor station with no indoor channel, so indoor readings
-need a second source. There are two, and the default is the boring one.
+need their own source. That source is a **$3 I2C sensor** on the board's
+Grove/Crowtail connector.
 
-## Default: a local I2C sensor
+## The part
 
-An **AHT20 / DHT20** (address 0x38) or **SHT4x** (0x44) on the board's
-Grove/Crowtail connector. Both are probed at boot and whichever answers is
-used, so either part works without a rebuild.
+An **AHT20 / DHT20** (address 0x38) or an **SHT4x** (0x44). Both are probed at
+boot and whichever answers is used, so either works without a rebuild.
 
 The DHT20 is the one Elecrow sells for this connector, and it is the same part
-Mjrovai's lesson 10 uses on this exact board at GPIO 7/8 — so the wiring is
+Mjrovai's lesson 10 uses on this exact board at GPIO 7/8 -- so the wiring is
 documented rather than hopeful. It plugs in; there is no soldering.
 
 - No account, no tokens, nothing that expires
 - Works with the internet down, like the local UDP feed
-- Costs about $3
+- About $3
 
-`indoor.c` shares the I2C bus the touch controller already owns via
+## Implementation notes
+
+`indoor.c` shares the I2C bus the touch controller already owns, via
 `display_get_i2c_bus()`, rather than creating a second master on the same two
-pins.
+pins. It therefore requires `display_init()` to have run first.
 
 Readings outside -20..70 C or 0..100 %RH are discarded. A sensor that has come
 loose returns garbage rather than failing cleanly, and a wall display showing
 -50 C indoors is worse than one showing nothing.
 
-## Alternative: a Nest thermostat
+Polling is every `CONFIG_INDOOR_POLL_INTERVAL_S` (default 30 s). Indoor
+temperature moves slowly; this is already generous.
 
-`nest.c`, selectable via `CONFIG_INDOOR_SOURCE_NEST`. It additionally reports
-setpoint, HVAC state and Eco mode, which drive the indoor ring's colour.
+If no sensor answers, `indoor_start()` logs once and returns
+`ESP_ERR_NOT_FOUND`. The indoor gauge reads "no sensor" and the outdoor half is
+completely unaffected.
 
-**It is not the default, for reasons worth recording:**
+## Staleness
 
-- Modern Nest hardware has **no local API**. Every reading is a cloud
-  round-trip, so it stops working when the internet does.
-- Access requires a **paid ($5) Google Device Access project**, a Google Cloud
-  project, an OAuth client, and a configured consent screen.
-- Publishing that consent screen to production is **currently blocked by a
-  Google console bug** — see the note in [nest-api.md](nest-api.md).
-- Unpublished apps get refresh tokens that **Google expires after 7 days**, so
-  the indoor tiles stop weekly until reauthorised in a browser.
+`wx_indoor_is_stale()` is deliberately separate from `wx_obs_is_stale()`: the
+two feeds fail independently, and a missing sensor must not imply a missing
+weather station. Past `CONFIG_INDOOR_STALE_S` (default 30 min) the indoor group
+dims to 40% and the label says how old the reading is, so an unplugged sensor
+looks obviously wrong rather than quietly frozen at its last value.
 
-For the actual requirement — *what is the temperature in here* — a $3 part that
-never expires is the better trade by a wide margin. The Nest path stays in the
-tree in case Google ever fixes publishing; switching is a `menuconfig` change,
-not a code change.
+## What was removed
 
-## What the UI does with each
+A Nest / Smart Device Management integration was built first and then deleted.
+Modern Nest hardware exposes no local API; reaching it needs a paid Google
+Device Access project, a Cloud project, an OAuth client, and a consent screen
+that Google's own console currently refuses to publish -- after which an
+unpublished app's refresh tokens expire every 7 days.
 
-`ui.c` keys off whether `thermostat_mode` is populated:
-
-| | I2C sensor | Nest |
-|---|---|---|
-| Temperature | yes | yes |
-| Humidity | yes | yes |
-| Setpoint line | hidden | "set to 70F" |
-| HVAC state + ring colour | hidden, ring is neutral | HEATING / COOLING / IDLE |
-| Staleness | after `CONFIG_NEST_STALE_S` | same, plus REAUTHORIZE on a dead token |
-
-No invented values: the bare sensor hides the rows it cannot fill rather than
-showing zeros.
+It would have added setpoint and HVAC state, which drive nothing the display
+actually needs. `git log` has the implementation if it is ever wanted back.

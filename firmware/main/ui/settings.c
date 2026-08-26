@@ -371,7 +371,7 @@ void settings_tick(void)
         "firmware   %s  (%s)\n"
         "network    %s\n"
         "station    %s   %.2f V   RSSI %d\n"
-        "thermostat %s\n"
+        "indoor     %s\n"
         "udp        %lu packets\n"
         "memory     %u KB internal   %u KB psram\n"
         "uptime     %luh %02lum",
@@ -381,7 +381,7 @@ void settings_tick(void)
         s.obs_valid ? (wx_obs_is_stale(&s) ? "stale" : "live") : "waiting",
         (double)s.battery_v, s.hub_rssi,
         s.indoor_valid ? (wx_indoor_is_stale(&s) ? "stale" : "live")
-                       : "not configured",
+                       : "no sensor",
         (unsigned long)tempest_udp_packet_count(),
         (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
         (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
