@@ -5,17 +5,32 @@ It exists because of a bug class this design keeps inviting: a pocket cut in
 the wrong CSG order silently erases a boss, and the part still renders and
 still exports -- just without the feature that locates the board.
 
+Heights are read back OUT of the model rather than written down here, so
+changing a constant re-aims the probes instead of breaking them.
+
 Run it after changing any constant:  python check_geometry.py
 """
-import struct, subprocess, sys, os, shutil
+import struct, subprocess, sys, os, re, shutil
 
-# Scratch files and the SCAD's own include both resolve relative to the
-# working directory, so pin it here rather than trusting where we were run.
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
-
 OS = shutil.which("openscad") or r"C:\Program Files\OpenSCAD\openscad.exe"
 if not os.path.exists(OS):
     sys.exit("openscad not found at %s -- set OS in this script" % OS)
+
+WANT = ["WALL", "BAY_DEPTH", "REAR_CLEARANCE", "PCB_Z", "SHELL_D", "BEZEL_T",
+        "FRONT_GLASS", "INSERT_L", "BOARD_W", "BOARD_H", "FIT_GAP",
+        "BAT_X", "BAT_Y", "BAT_W", "BAT_H"]
+NL = chr(10)
+open('_chk.scad', 'w').write(
+    'PART="none";' + NL + 'include <tempest_stand.scad>' + NL
+    + "".join('echo("K %s=", %s);' % (k, k) + NL for k in WANT))
+r = subprocess.run([OS, '-o', '_chk.stl', '--export-format', 'binstl',
+                    '-D', 'PART="none"', '_chk.scad'], capture_output=True, text=True)
+K = {m.group(1): float(m.group(2))
+     for m in re.finditer(r'ECHO: "K (\w+)=", ([-\d.e+]+)', r.stderr)}
+missing = [k for k in WANT if k not in K]
+if missing:
+    sys.exit("could not read %s from the model: %s" % (missing, r.stderr[-800:]))
 
 def probe(label, body, expect):
     open('_chk.scad','w').write('PART="none";\ninclude <tempest_stand.scad>\n' + body)
@@ -39,29 +54,41 @@ def probe(label, body, expect):
 
 ok = True
 # The bezel's insert boss, and the bore up its middle.
-ok &= probe("bezel boss present at z=6",
-    "intersection(){bezel();translate([0.5,0.5,5.9])cube([9,9,0.2]);}", "SOLID")
-ok &= probe("bezel insert bore is open at z=6",
-    "intersection(){bezel();translate([2.1,2.0,5.9])cube([2,2,0.2]);}", "EMPTY")
-ok &= probe("bezel front skin is unbroken at z=1.5",
-    "intersection(){bezel();translate([2.1,2.0,1.4])cube([2,2,0.2]);}", "SOLID")
-ok &= probe("bezel pocket has opened by z=2.5",
-    "intersection(){bezel();translate([2.1,2.0,2.4])cube([2,2,0.2]);}", "EMPTY")
+BOSS_MID  = K["BEZEL_T"] + K["FRONT_GLASS"] / 2          # inside the boss
+SKIN      = K["BEZEL_T"] + K["FRONT_GLASS"] - K["INSERT_L"]   # solid front skin
+def slab(part, x, y, w, z):
+    return "intersection(){%s();translate([%f,%f,%f])cube([%f,%f,0.2]);}" % (
+        part, x, y, z - 0.1, w, w)
+
+ok &= probe("bezel boss present mid-height (z=%.1f)" % BOSS_MID,
+    slab("bezel", 0.5, 0.5, 9, BOSS_MID), "SOLID")
+ok &= probe("bezel insert bore is open (z=%.1f)" % BOSS_MID,
+    slab("bezel", 2.1, 2.0, 2, BOSS_MID), "EMPTY")
+ok &= probe("bezel front skin unbroken (z=%.1f)" % (SKIN / 2),
+    slab("bezel", 2.1, 2.0, 2, SKIN / 2), "SOLID")
+ok &= probe("bezel pocket has opened (z=%.1f)" % (SKIN + 0.5),
+    slab("bezel", 2.1, 2.0, 2, SKIN + 0.5), "EMPTY")
 # The shell's spacer boss, and the screw clearance through it.
-ok &= probe("shell boss present at z=8",
-    "intersection(){shell();translate([0.5,0.5,7.9])cube([9,9,0.2]);}", "SOLID")
-ok &= probe("shell screw clearance is open at z=8",
-    "intersection(){shell();translate([2.0,1.9,7.9])cube([2.2,2.2,0.2]);}", "EMPTY")
-ok &= probe("shell screw hole breaks out of the back at z=0.1",
+MID = K["PCB_Z"] / 2
+ok &= probe("shell boss present mid-height (z=%.1f)" % MID,
+    slab("shell", 0.5, 0.5, 9, MID), "SOLID")
+ok &= probe("shell screw clearance is open (z=%.1f)" % MID,
+    slab("shell", 2.0, 1.9, 2.2, MID), "EMPTY")
+ok &= probe("shell screw hole breaks out of the back (z=0.1)",
     "intersection(){shell();translate([2.0,1.9,0.05])cube([2.2,2.2,0.1]);}", "EMPTY")
-# The boss tops must meet the PCB, i.e. reach WALL+REAR_CLEARANCE = 13.4.
-ok &= probe("shell boss stops at the PCB plane (nothing above 13.4)",
-    "intersection(){shell();translate([0.5,0.5,13.5])cube([9,9,0.2]);}", "EMPTY")
+ok &= probe("shell boss stops at the PCB plane (z=%.1f)" % (K["PCB_Z"] + 0.2),
+    slab("shell", 0.5, 0.5, 9, K["PCB_Z"] + 0.2), "EMPTY")
+ok &= probe("battery fence stands on the plate (z=%.1f)" % (K["WALL"] + 4),
+    slab("shell", K["BAT_X"] - 2.0, K["BAT_Y"] + 20, 1.5, K["WALL"] + 4), "SOLID")
+ok &= probe("battery bay floor is clear (z=%.1f)" % (K["WALL"] + 4),
+    slab("shell", K["BAT_X"] + 20, K["BAT_Y"] + 20, 4, K["WALL"] + 4), "EMPTY")
+ok &= probe("speaker grille is open through the plate (z=%.1f)" % (K["WALL"] / 2),
+    slab("shell", 29.2, 31.2, 1.6, K["WALL"] / 2), "EMPTY")
 
 # All four foot bolts per foot must be drilled, and drilled where the foot
 # actually presents its holes. FOOT_X is 0.28/0.72 of the board width; the
 # shell used to drill two holes at 0.25/0.75, so nothing lined up.
-FOOT_X = [247.04 * 0.28, 247.04 * 0.72]
+FOOT_X = [K["BOARD_W"] * 0.28, K["BOARD_W"] * 0.72]
 for fx in FOOT_X:
     for u in (22, 52):
         for dz in (-13, 13):
@@ -78,7 +105,7 @@ ok &= probe("shell is solid between the foot holes",
 # Which walls are actually open. Reads the exported shell directly rather than
 # round-tripping through OpenSCAD, so it costs one export instead of hundreds.
 # ---------------------------------------------------------------------------
-W, H, FIT, WALL = 247.04, 147.01, 0.6, 2.4
+W, H, FIT, WALL = K["BOARD_W"], K["BOARD_H"], K["FIT_GAP"], K["WALL"]
 
 subprocess.run([OS, '-o', '_chk.stl', '--export-format', 'binstl',
                 '-D', 'PART="shell"', 'tempest_stand.scad'],
@@ -88,7 +115,8 @@ tris = [[struct.unpack('<3f', d[84+i*50+12+j*12 : 84+i*50+24+j*12]) for j in ran
         for i in range(struct.unpack('<I', d[80:84])[0])]
 os.remove('_chk.stl')
 
-def openings(plane_axis, plane_val, along, lo, hi, zlo=3.0, zhi=13.0):
+ZLO, ZHI = K["PCB_Z"] - 2.0, K["PCB_Z"] - 0.5
+def openings(plane_axis, plane_val, along, lo, hi, zlo=ZLO, zhi=ZHI):
     iv = sorted((min(p[along] for p in v), max(p[along] for p in v))
                 for v in tris
                 if all(abs(p[plane_axis] - plane_val) < 0.05 for p in v)

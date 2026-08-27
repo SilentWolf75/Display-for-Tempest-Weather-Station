@@ -22,7 +22,17 @@
 // Units: millimetres. Render with $fn=48 for a clean preview, 96 to export.
 
 // ---------------------------------------------------------------------------
-// MEASURE THIS ONE
+// Board stack -- MEASURED, from Elecrow's own STEP model of the assembly
+// (ESP32-P4-10_1-inch-20251230.stp, board representation 247.00 x 147.00).
+// These four were guesses until that model turned up, and all four were wrong.
+// Read off the model, with the PCB's front face as the reference:
+//
+//     glass front surface      +2.00
+//     active area plane        -0.20     222.7 x 125.3
+//     LCD module footprint     -4.80     235.5 x 143.5, centred on the board
+//     PCB front face           -4.90
+//     PCB back face            -6.50     PCB is 1.60 mm
+//     rear-most extent        -19.62     199.0 x 76.5
 // ---------------------------------------------------------------------------
 
 // Distance from the back surface of the PCB to the highest thing standing on
@@ -31,28 +41,36 @@
 // Add 1.5 mm of air on top of whatever you read.
 //
 // If it is wrong the shell will either bow the board (too small) or stand
-// proud of it (too large). Nothing else in this file depends on it.
-REAR_CLEARANCE = 11.0;      // <-- CHANGE ME
+// proud of it (too large).
+REAR_CLEARANCE = 13.5;      // model says 13.12; 0.4 mm of air on top
 
 // How far the display surface stands PROUD of the PCB's front face. The bezel
 // is recessed by this much so it lies flat on the glass instead of on the PCB
-// and rocking. Straight edge across the front, measure to the PCB.
-FRONT_GLASS = 3.5;          // <-- CHANGE ME
+// and rocking.
+FRONT_GLASS = 6.9;          // glass +2.00 over PCB front -4.90
 
-// Total board thickness, front glass to back of PCB, used only to work out
-// screw length. Not critical.
-BOARD_THICK = 6.0;          // <-- CHANGE ME
+// Total board thickness, front glass to back of PCB. Sets screw length.
+BOARD_THICK = 8.5;          // glass +2.00 to PCB back -6.50
 
 // Visible active area of the panel and where its bottom-left corner sits
 // relative to the board's bottom-left corner, seen from the FRONT.
 //
-// The default is the active area implied by a 10.1" diagonal at 1024x600
-// (221.3 x 129.7 mm) plus 2 mm of safety all round, assumed centred. It is
-// deliberately GENEROUS: too large only shows a sliver of PCB, too small
-// covers pixels and cannot be undone once printed. Measure the lit area with
-// the panel powered on and tighten these if you want a chunkier frame.
-ACTIVE_W = 225.3;
-ACTIVE_H = 133.7;
+// The STEP model puts the lit area at 222.7 x 125.3, and says it is NOT quite
+// centred in the LCD module -- off by 0.65 mm one way and 3.0 mm the other.
+// The model's in-plane axes cannot be tied to a left/right/up/down without an
+// anchor I do not have, so the SIGN of that 3 mm offset is unknown.
+//
+// So the window is sized to be right either way: 226 x 135, centred. That
+// clears the lit area with margin whichever way the offset runs, while still
+// staying inside the LCD module (235.5 x 143.5, which IS centred), so no bare
+// PCB shows through. The error is deliberately one-sided -- a window slightly
+// too big shows a sliver of black module border, one too small covers pixels
+// and cannot be undone once printed.
+//
+// Power the panel on, measure the lit rectangle, and tighten these if you
+// want a narrower frame.
+ACTIVE_W = 226;
+ACTIVE_H = 135;
 ACTIVE_X = (247.04 - ACTIVE_W) / 2;
 ACTIVE_Y = (147.01 - ACTIVE_H) / 2;
 
@@ -76,6 +94,35 @@ holes = [
 ];
 
 // ---------------------------------------------------------------------------
+// Room in the back for a battery and the two speakers
+//
+// The whole shell is deepened by BAY_DEPTH rather than growing a hump: the
+// back stays flat for the feet, the vents stay usable, and there is somewhere
+// to put the speakers wherever their wires happen to reach.
+//
+// Stacking, from the back plate forward: battery and speakers sit on the
+// inside of the plate and occupy BAY_DEPTH; the board's own rear components
+// occupy REAR_CLEARANCE above that.
+// ---------------------------------------------------------------------------
+
+BAY_DEPTH = 12;             // clear depth for the battery, floor to components
+
+// Flat 3.7 V LiPo. Sized for a 10000 mAh pack, which also swallows a 5000.
+// Common 10000 mAh packs run about 130 x 65 x 10; 5000 mAh about 100 x 55 x 8.
+BAT_W = 140; BAT_H = 75;    // footprint, with slack
+BAT_FENCE = 8;              // rib height holding it in place
+BAT_X = (BOARD_W - BAT_W) / 2;
+BAT_Y = 66;                 // clear of the foot pads, which end at y = 63
+
+// Speakers. Elecrow ships two; they are NOT in the STEP model, so this is the
+// one dimension here still waiting on a caliper. Generous by default.
+SPK_W = 34; SPK_H = 24;     // <-- MEASURE the speaker body
+SPK_FENCE = 6;
+speakers = [[30, 32], [217, 32]];   // centres, board coords: bottom corners,
+                                    // clear of both foot pads, stereo-spread
+
+
+// ---------------------------------------------------------------------------
 // Shell
 // ---------------------------------------------------------------------------
 
@@ -85,9 +132,10 @@ CORNER_R  = 4;
 
 SHELL_W = BOARD_W + 2*FIT_GAP + 2*WALL;     // ~253.8 -- fits a 270 mm bed
 SHELL_H = BOARD_H + 2*FIT_GAP + 2*WALL;     // ~153.8
-SHELL_D = REAR_CLEARANCE + WALL;
+SHELL_D = REAR_CLEARANCE + BAY_DEPTH + WALL;
+PCB_Z   = WALL + BAY_DEPTH + REAR_CLEARANCE;   // where the PCB's back sits
 
-BOSS_D    = 8;          // spacer boss outside diameter
+BOSS_D    = 10;         // spacer boss outside diameter; taller now, so wider
 SCREW_CLR = 3.4;        // M3 clearance -- the screw passes THROUGH the shell
 
 // M3 x 6 x 4.2 brass heat-set insert, threaded into the BEZEL.
@@ -120,6 +168,23 @@ ALL_PORTS = false;
 usb_cuts = [
     [ 63.0, 14],    // J16  USB-C
     [ 84.0, 14],    // J1   USB-C
+];
+
+// The BOOT button, the RESET button and the power slide switch are all on
+// this same right-hand edge -- not on the back. Positions come from the STEP
+// model and were cross-checked against the two USB-C ports, which the model
+// and the PCB file agree on to 0.6 mm.
+//
+// Note this corrects the table below: what it calls "J10 XH2.54-4P at 41.3"
+// is the slide switch, and what it calls "SW1 power switch at 100.9" is the
+// 4-pin through-hole connector CN2. The STEP model names its parts, so it
+// wins over the designators I inferred from the PCB file.
+// The second button and the switch get ONE opening. Their bodies end up
+// 1.8 mm apart (button 31.7..36.9, switch 38.7..51.1) and no rib that thin is
+// worth printing, so the merge is deliberate rather than accidental.
+ctrl_cuts = [
+    [ 19.8, 10],    // K3/K4  tactile button, 5.2 mm body
+    [ 41.4, 24],    // K4/K3 tactile button + MST22D18G2 power slide switch
 ];
 
 right_cuts = [
@@ -165,7 +230,8 @@ module vent_grid() {
         for (y = [28 : 18 : BOARD_H - 28])
             // Skip anything a foot pad would sit on top of and plug anyway.
             if (!(min([for (fx = FOOT_X) abs(x - fx)]) < 24
-                  && y < FOOT_BOLT_U[1] + 14))
+                  && y < FOOT_BOLT_U[1] + 14)
+                && !in_bay(x, y))
             translate([x, y, -1])
                 hull() {
                     translate([0, -5, 0]) cylinder(d=4, h=WALL+2, $fn=24);
@@ -174,24 +240,68 @@ module vent_grid() {
 }
 
 module edge_cutouts() {
+    // Openings start just under the PCB rather than at the back plate -- the
+    // shell is now deep enough that cutting the full height would leave a
+    // slot most of the way down the side for no reason.
+    z0 = PCB_Z - 3;
     depth = SHELL_D + 2;
     // Right wall. Always the two USB-C ports; the rest only if asked for.
-    for (c = ALL_PORTS ? right_cuts : usb_cuts)
-        translate([BOARD_W + FIT_GAP - 1, c[0] - c[1]/2, WALL])
+    for (c = ALL_PORTS ? right_cuts : concat(usb_cuts, ctrl_cuts))
+        translate([BOARD_W + FIT_GAP - 1, c[0] - c[1]/2, z0])
             cube([WALL + 3, c[1], depth]);
     // Left wall
     for (c = ALL_PORTS ? left_cuts : [])
-        translate([-FIT_GAP - WALL - 2, c[0] - c[1]/2, WALL])
+        translate([-FIT_GAP - WALL - 2, c[0] - c[1]/2, z0])
             cube([WALL + 3, c[1], depth]);
     // Top wall
     for (c = ALL_PORTS ? top_cuts : [])
-        translate([c[0] - c[1]/2, BOARD_H + FIT_GAP - 1, WALL])
+        translate([c[0] - c[1]/2, BOARD_H + FIT_GAP - 1, z0])
             cube([c[1], WALL + 3, depth]);
     // Bottom wall
     for (c = ALL_PORTS ? bottom_cuts : [])
-        translate([c[0] - c[1]/2, -FIT_GAP - WALL - 2, WALL])
+        translate([c[0] - c[1]/2, -FIT_GAP - WALL - 2, z0])
             cube([c[1], WALL + 3, depth]);
 }
+
+// A rib fence rather than a closed box: it locates the part, uses almost no
+// plastic, and leaves the wire somewhere to go.
+module fence(x, y, w, h, tall, gap_at_x) {
+    t = 2.4;
+    difference() {
+        translate([x - t, y - t, WALL])
+            cube([w + 2*t, h + 2*t, tall]);
+        translate([x, y, WALL - 1])
+            cube([w, h, tall + 2]);
+        translate([gap_at_x, y - t - 1, WALL + tall - 6])
+            cube([14, t + 2, 7]);          // lead-out notch
+    }
+}
+
+module battery_bay()  { fence(BAT_X, BAT_Y, BAT_W, BAT_H, BAT_FENCE, BAT_X + 8); }
+
+module speaker_bays() {
+    for (c = speakers)
+        fence(c[0] - SPK_W/2, c[1] - SPK_H/2, SPK_W, SPK_H, SPK_FENCE,
+              c[0] - SPK_W/2 + 4);
+}
+
+// Slots under each speaker so it is not firing into a sealed box.
+module speaker_grilles() {
+    for (c = speakers)
+        for (i = [-2 : 1 : 2])
+            translate([c[0] + i * 5, c[1], -1])
+                hull() {
+                    translate([0, -SPK_H/2 + 5, 0]) cylinder(d=3, h=WALL+2, $fn=20);
+                    translate([0,  SPK_H/2 - 5, 0]) cylinder(d=3, h=WALL+2, $fn=20);
+                }
+}
+
+// True where a bay sits, so the vent grid can stay out of the way.
+function in_bay(x, y) =
+    (x > BAT_X - 6 && x < BAT_X + BAT_W + 6 &&
+     y > BAT_Y - 6 && y < BAT_Y + BAT_H + 6)
+    || max([for (c = speakers)
+            (abs(x - c[0]) < SPK_W/2 + 8 && abs(y - c[1]) < SPK_H/2 + 8) ? 1 : 0]) > 0;
 
 module shell() {
     difference() {
@@ -212,7 +322,12 @@ module shell() {
             // rear clearance and the screw passes straight through them.
             for (h = holes)
                 translate([h[0], h[1], WALL])
-                    cylinder(d=BOSS_D, h=REAR_CLEARANCE, $fn=48);
+                    cylinder(d=BOSS_D, h=BAY_DEPTH + REAR_CLEARANCE, $fn=48);
+
+            // Retention for the battery and the two speakers, standing on
+            // the inside of the back plate.
+            battery_bay();
+            speaker_bays();
 
             // Pads inside the back plate that the foot screws pull against.
             // Long enough to carry BOTH bolt rows, not just the lower one.
@@ -230,6 +345,8 @@ module shell() {
         for (h = holes)
             translate([h[0], h[1], -0.01])
                 cylinder(d1=6.6, d2=SCREW_CLR, h=1.6, $fn=32);
+
+        speaker_grilles();
 
         // Foot screws: four per foot, matching foot()'s four holes. These are
         // CLEARANCE -- the screw drops in from inside the shell, through the
@@ -381,7 +498,7 @@ PART = "preview";
 // measurement the numbers change with it -- read them off the console rather
 // than trusting the README.
 PCB_ONLY   = BOARD_THICK - FRONT_GLASS;             // PCB without the glass
-SCREW_MIN  = WALL + REAR_CLEARANCE + PCB_ONLY;      // just reaches the insert
+SCREW_MIN  = PCB_Z + PCB_ONLY;                      // just reaches the insert
 SCREW_MAX  = SCREW_MIN + INSERT_L + 0.2;            // bottoms out in the bezel
 echo(str("M3 screw: at least ", SCREW_MIN, " mm to reach the insert, ",
          "at most ", SCREW_MAX, " mm before it bottoms out. Use ",

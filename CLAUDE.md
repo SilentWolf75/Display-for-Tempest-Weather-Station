@@ -107,6 +107,39 @@ battery 2.647 V, 1-minute report interval, all 18 `obs_st` fields present and in
 spec order. The Python decoder is the reference the C parser mirrors — if they
 ever disagree, the Python one was validated against real traffic.
 
+## The STEP model is the authoritative source for mechanical dimensions
+
+`ESP32-P4-10_1-inch-20251230.stp` (Creo assembly, ~19.5 MB, from Elecrow) is a
+full 3D model of the board with **named parts**, and it beats both the Eagle
+PCB file and any hand measurement. It settles:
+
+- **The stack**, referenced to the PCB's front face: glass front +2.00, active
+  area -0.20 (222.7 x 125.3), LCD module footprint -4.80 (235.5 x 143.5,
+  centred), PCB front -4.90, PCB back -6.50 (so the PCB is 1.60), rear-most
+  extent -19.62. Board rep is #5343, 247.00 x 147.00.
+- **Which part is which.** The .brd-derived table in `case/tempest_stand.scad`
+  had two designators swapped: the thing at y=41.3 on the right edge is the
+  MST22D18G2 power slide switch, and the thing at y=100.9 is CN2, a 4-pin
+  through-hole connector. The STEP names its parts, so it wins.
+- **BOOT and RESET** are tactile switches on the **right edge** at y = 19.8 and
+  34.3, alongside the switch at 44.9 and the two USB-C at 63.0 and 84.0. They
+  are not on the back.
+
+Parsing notes, because this cost real time: part geometry is in LOCAL
+coordinates and placed by `MAPPED_ITEM` + `REPRESENTATION_MAP`, not only by
+`NEXT_ASSEMBLY_USAGE_OCCURRENCE` — a traversal that ignores mapped items
+returns empty boxes for the biggest parts. Instances of one product must be
+labelled separately or they merge into one meaningless bbox. And the
+sub-assembly frames are not all aligned: one cluster of parts comes out rotated
+90 degrees from another, so **cross-check any position against a known one**
+(the two USB-C ports agree with the PCB file to 0.6 mm and make a good anchor).
+The in-plane axes still cannot be tied to a left/right/up/down, which is why
+the bezel window is sized to be safe under either sign of the active area's
+3 mm off-centre offset.
+
+The speakers are accessories and are **not** in the model, so their body size
+is still the one dimension in `case/` waiting on a caliper.
+
 ## Unverified — do not trust
 
 `firmware/main/board_pins.h`. Only I2C GPIO 7/8 is sourced. Backlight pin, panel
