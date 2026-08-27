@@ -163,6 +163,9 @@ module vent_grid() {
     // air per unit of lost stiffness. Kept clear of the screw bosses.
     for (x = [60 : 22 : BOARD_W - 60])
         for (y = [28 : 18 : BOARD_H - 28])
+            // Skip anything a foot pad would sit on top of and plug anyway.
+            if (!(min([for (fx = FOOT_X) abs(x - fx)]) < 24
+                  && y < FOOT_BOLT_U[1] + 14))
             translate([x, y, -1])
                 hull() {
                     translate([0, -5, 0]) cylinder(d=4, h=WALL+2, $fn=24);
@@ -211,9 +214,11 @@ module shell() {
                 translate([h[0], h[1], WALL])
                     cylinder(d=BOSS_D, h=REAR_CLEARANCE, $fn=48);
 
-            // Mounting pads for the feet, on the outside of the back plate.
-            for (fx = [BOARD_W*0.25, BOARD_W*0.75])
-                translate([fx - 20, 12, WALL]) cube([40, 16, 3]);
+            // Pads inside the back plate that the foot screws pull against.
+            // Long enough to carry BOTH bolt rows, not just the lower one.
+            for (fx = FOOT_X)
+                translate([fx - 20, FOOT_BOLT_U[0] - 11, WALL])
+                    cube([40, FOOT_BOLT_U[1] - FOOT_BOLT_U[0] + 22, 3]);
         }
 
         // Clearance right through: the screw enters here, at the back.
@@ -226,11 +231,14 @@ module shell() {
             translate([h[0], h[1], -0.01])
                 cylinder(d1=6.6, d2=SCREW_CLR, h=1.6, $fn=32);
 
-        // Foot screw pilots
-        for (fx = [BOARD_W*0.25, BOARD_W*0.75])
-            for (dx = [-13, 13])
-                translate([fx + dx, 20, -1])
-                    cylinder(d=2.9, h=WALL + 6, $fn=24);
+        // Foot screws: four per foot, matching foot()'s four holes. These are
+        // CLEARANCE -- the screw drops in from inside the shell, through the
+        // plate and pad, and taps into the foot. The pilot is in the foot.
+        for (fx = FOOT_X)
+            for (u = FOOT_BOLT_U)
+                for (dz = FOOT_BOLT_DZ)
+                    translate([fx + dz, u, -1])
+                        cylinder(d=3.4, h=WALL + 6, $fn=24);
     }
 }
 
@@ -307,6 +315,20 @@ module chamfer_frame(w, h, c) {
 // rear toe is what stops a 250 mm wide panel from tipping backwards.
 // ---------------------------------------------------------------------------
 
+// Where the feet stand, and where their bolt holes are. The shell, the foot
+// and the preview all read these, so the three cannot drift apart -- which is
+// exactly what happened when the shell drilled at 0.25/0.75 and the assembly
+// stood the feet at 0.28/0.72.
+//
+// A hole "u" up the foot's mounting face and "dz" across its width lands, in
+// shell coordinates, at exactly (foot_x + dz, u). That falls out of the two
+// rotations cancelling: the shell is bolted flat to the mount face, so
+// distance up that face becomes distance up the shell.
+FOOT_X       = [BOARD_W * 0.28, BOARD_W * 0.72];
+FOOT_BOLT_U  = [22, 52];        // up the mounting face
+FOOT_BOLT_DZ = [-13, 13];       // across the foot's width
+FOOT_BOLT_DEPTH = 8;            // blind depth into the wedge
+
 FOOT_W     = 40;
 FOOT_DEPTH = 92;
 FOOT_H     = 74;
@@ -329,13 +351,13 @@ module foot() {
 
         // Bolt holes driven perpendicular to the MOUNTING face, not to the
         // world -- otherwise the screws enter at an angle and split the wedge.
-        for (u = [22, 52])                      // distance up the mount face
-            for (z = [FOOT_W/2 - 13, FOOT_W/2 + 13])
-                translate([u * sin(TILT), u * cos(TILT), z])
+        for (u = FOOT_BOLT_U)                   // distance up the mount face
+            for (dz = FOOT_BOLT_DZ)
+                translate([u * sin(TILT), u * cos(TILT), FOOT_W/2 + dz])
                     rotate([0, 0, -TILT])
                         rotate([0, 90, 0])
                             translate([0, 0, -14])
-                                cylinder(d=3.4, h=20, $fn=32);
+                                cylinder(d=2.9, h=14 + FOOT_BOLT_DEPTH, $fn=32);
 
         // Pockets on BOTH outer faces rather than a hole straight through:
         // that keeps a solid web down the middle and full-thickness side walls
@@ -381,7 +403,7 @@ else {
     //          runs (sin TILT, cos TILT) in profile, to the same direction
     // so the two faces are coplanar and the panel leans back by exactly TILT.
     color("#8a97a6")
-        for (fx = [BOARD_W*0.28, BOARD_W*0.72])
+        for (fx = FOOT_X)
             translate([fx - FOOT_W/2, 0, 0])
                 rotate([0, 0, 90]) rotate([90, 0, 0]) foot();
 

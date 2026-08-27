@@ -25,7 +25,7 @@ are in brass rather than printed plastic, and nothing shows on the front.
 |---|---|
 | 4 | M3 x 6 mm x 4.2 mm OD brass heat-set inserts |
 | 4 | M3 countersunk screws, **20 mm** (see below) |
-| 4 | M3 x 12 mm, any head, for the feet |
+| 8 | M3 x 12 mm, any head, for the feet — **four per foot** |
 
 Screw length is worked out from your measurements rather than assumed. Run:
 
@@ -132,13 +132,15 @@ not diagonally, and one at a time.
 2. Check each one is **square** before it cools. Sighting across the bezel is
    enough; a leaning insert will not accept the screw later, and reheating to
    fix it is much harder than getting it right now.
-3. Lay the board into the bezel, face down, so the glass sits in the relief and
+3. **Fit the feet now, before the board goes anywhere near the shell.** Their
+   screws are driven from *inside* the shell — eight **M3 × 12 mm**, four per
+   foot, down through the pads and tapping into the wedge. Once the board is
+   in you cannot reach them.
+4. Lay the board into the bezel, face down, so the glass sits in the relief and
    the four bosses land on the PCB at the corners.
-4. Drop the shell over the back. The bosses inside it should meet the PCB.
-5. Drive the four **M3 countersunk** screws in from the back. They pass through
+5. Drop the shell over the back. The bosses inside it should meet the PCB.
+6. Drive the four **M3 countersunk** screws in from the back. They pass through
    the shell, through the board, into the brass.
-6. Four **M3 × 12 mm** into the feet, two per foot, through the pads on the
-   shell's back.
 7. Route the USB-C power cable out of the right-edge cutout.
 
 Tighten the four main screws **gradually and in a diagonal order**. They are
@@ -156,6 +158,9 @@ Everything is a named constant at the top of the `.scad`:
 - `FIT_GAP` — 0.6 mm of slack around the board. Tighten to 0.4 mm if your
   printer runs dimensionally accurate.
 - `WALL` — 2.4 mm, which is six perimeters at a 0.4 mm nozzle.
+- `FOOT_X`, `FOOT_BOLT_U`, `FOOT_BOLT_DZ` — where the feet stand and where
+  their bolts are. The shell, the foot and the preview all read these, so the
+  drilling cannot drift out of step with the part being drilled into.
 - `FOOT_DEPTH` — 92 mm of rearward reach. It only needs to exceed the 45 mm
   the panel's top leans back, so there is plenty of margin; shorten it if the
   stand is too deep for your shelf.

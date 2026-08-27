@@ -58,6 +58,22 @@ ok &= probe("shell screw hole breaks out of the back at z=0.1",
 ok &= probe("shell boss stops at the PCB plane (nothing above 13.4)",
     "intersection(){shell();translate([0.5,0.5,13.5])cube([9,9,0.2]);}", "EMPTY")
 
+# All four foot bolts per foot must be drilled, and drilled where the foot
+# actually presents its holes. FOOT_X is 0.28/0.72 of the board width; the
+# shell used to drill two holes at 0.25/0.75, so nothing lined up.
+FOOT_X = [247.04 * 0.28, 247.04 * 0.72]
+for fx in FOOT_X:
+    for u in (22, 52):
+        for dz in (-13, 13):
+            ok &= probe("shell foot hole at (%.0f, %d)" % (fx + dz, u),
+                "intersection(){shell();translate([%f,%f,-0.5])cube([2,2,1]);}"
+                % (fx + dz - 1, u - 1), "EMPTY")
+# ...and the plate between a pair must still be there.
+ok &= probe("shell is solid between the foot holes",
+    "intersection(){shell();translate([%f,21,-0.5])cube([2,2,1]);}"
+    % (FOOT_X[0] - 1), "SOLID")
+
+
 # ---------------------------------------------------------------------------
 # Which walls are actually open. Reads the exported shell directly rather than
 # round-tripping through OpenSCAD, so it costs one export instead of hundreds.
