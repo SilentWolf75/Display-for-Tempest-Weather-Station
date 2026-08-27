@@ -107,7 +107,21 @@ TILT = 18;              // degrees off vertical
 // cut through the full depth of the wall so connector height cannot be wrong.
 // ---------------------------------------------------------------------------
 
+// ONLY the two USB-C ports are cut by default. Everything else on this board
+// -- Grove, GPIO headers, PH2.0, test points, the microphone port, the power
+// switch -- keeps its measured position below but is switched off, so the
+// shell comes out as a clean back with two openings on the right edge.
+//
+// Set this true to open all of them again. The positions are read from the
+// PCB file and are correct either way; this only decides which get cut.
+ALL_PORTS = false;
+
 // Right edge, positioned by Y (height up the board)
+usb_cuts = [
+    [ 63.0, 14],    // J16  USB-C
+    [ 84.0, 14],    // J1   USB-C
+];
+
 right_cuts = [
     [ 41.3, 14],    // J10  XH2.54-4P
     [ 63.0, 14],    // J16  USB-C
@@ -158,20 +172,20 @@ module vent_grid() {
 
 module edge_cutouts() {
     depth = SHELL_D + 2;
-    // Right wall
-    for (c = right_cuts)
+    // Right wall. Always the two USB-C ports; the rest only if asked for.
+    for (c = ALL_PORTS ? right_cuts : usb_cuts)
         translate([BOARD_W + FIT_GAP - 1, c[0] - c[1]/2, WALL])
             cube([WALL + 3, c[1], depth]);
     // Left wall
-    for (c = left_cuts)
+    for (c = ALL_PORTS ? left_cuts : [])
         translate([-FIT_GAP - WALL - 2, c[0] - c[1]/2, WALL])
             cube([WALL + 3, c[1], depth]);
     // Top wall
-    for (c = top_cuts)
+    for (c = ALL_PORTS ? top_cuts : [])
         translate([c[0] - c[1]/2, BOARD_H + FIT_GAP - 1, WALL])
             cube([c[1], WALL + 3, depth]);
     // Bottom wall
-    for (c = bottom_cuts)
+    for (c = ALL_PORTS ? bottom_cuts : [])
         translate([c[0] - c[1]/2, -FIT_GAP - WALL - 2, WALL])
             cube([c[1], WALL + 3, depth]);
 }

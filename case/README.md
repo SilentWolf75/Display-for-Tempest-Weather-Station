@@ -71,6 +71,9 @@ boss:
 python check_geometry.py
 ```
 
+It also prints which spans of each wall are open, so you can confirm at a
+glance that the back has the two USB-C openings and nothing else.
+
 ## Where the numbers came from
 
 Read out of `Eagle_SCH&PCB/1.2/ESP32-P4 Display 10.1 inch V1.2.brd` in
@@ -79,7 +82,9 @@ Elecrow's repository, not measured by hand or taken from the spec sheet:
 - **Board outline** 247.04 × 147.01 mm
 - **Mounting holes** M3.2, four corners, 3.1 mm in from each edge
   (240.9 × 141.0 mm pattern)
-- **Every connector position**, which is what places the cutouts:
+- **Every connector position** — all measured, but only the two USB-C ports
+  are cut. `ALL_PORTS = false` near the top of the `.scad` opens the rest if
+  you ever want them; the positions below stay correct either way:
   - Right edge: XH2.54 at y=41.3, USB-C at y=63.0 and y=84.0, power switch at y=100.9
   - Top edge: Grove at x=18.1 and x=40.1, GPIO headers at x=215.5 and x=231.0
   - Bottom edge: PH2.0 at x=35.8, 2×12 header at x=123.9, test points at
@@ -88,8 +93,16 @@ Elecrow's repository, not measured by hand or taken from the spec sheet:
 
 Origin is the bottom-left corner of the board seen from the **front**.
 
-The Grove connector at x=18.1 on the top edge is the one the indoor
-temperature sensor plugs into, so that cutout matters.
+### Two things the back no longer opens
+
+Worth knowing before you print, because both are sealed in once assembled:
+
+- **SW1, the power switch**, at y=100.9 on the right edge. With `ALL_PORTS`
+  off you cannot reach it — the panel powers up and down by its USB-C cable.
+- **The Grove connector at x=18.1** on the top edge, which is where the indoor
+  temperature sensor plugs in. Its cable has nowhere to leave the case.
+
+Set `ALL_PORTS = true` and re-export the shell if you want either of them.
 
 ## Printing
 
