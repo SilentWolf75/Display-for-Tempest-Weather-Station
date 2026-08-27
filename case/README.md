@@ -26,7 +26,7 @@ are in brass rather than printed plastic, and nothing shows on the front.
 | 4 | M3 x 6 mm x 4.2 mm OD brass heat-set inserts |
 | 4 | M3 countersunk screws, **35 mm** (see below) |
 | 8 | M3 x 12 mm, any head, for the feet — **four per foot** |
-| 1 | Flat 3.7 V LiPo with a PH2.0 lead, up to 140 x 75 x 12 mm |
+| 1 | Flat 3.7 V LiPo with a PH2.0 lead, up to 132 x 75 x 12 mm |
 | — | Foam tape or a strap so the battery cannot move |
 
 Screw length is worked out from your measurements rather than assumed. Run:
@@ -51,16 +51,17 @@ Stacking from the back plate forward: the battery and speakers sit on the
 inside of the plate and take `BAY_DEPTH`; the board's own rear components take
 `REAR_CLEARANCE` above that.
 
-- **Battery** — a rib fence sized **140 x 75 x 12**, which takes a 10000 mAh
+- **Battery** — a rib fence sized **132 x 75 x 12**, which takes a 10000 mAh
   flat pack (typically around 130 x 65 x 10) and also swallows a 5000 mAh one
   (around 100 x 55 x 8). A 5000 will rattle in it, so tape it down. The fence
   has a notch for the lead, which runs to the PH2.0 socket at x = 35.8 on the
   bottom edge. It is a fence rather than a box: almost no plastic, and the wire
   has somewhere to go.
-- **Speakers** — two fenced pockets in the bottom corners, at x = 30 and
-  x = 217, spread apart for stereo and clear of both foot pads. Each has slots
-  through the back plate underneath, so the speaker is not firing into a sealed
-  box.
+- **Speakers** — two fenced pockets up the sides at x = 34 and x = 213, which
+  are mirror images of each other so the back stays symmetric. They moved off
+  the bottom because the foot pads own that band and the two access slots own
+  the corners next to them. Each has slots through the back plate underneath,
+  so the speaker is not firing into a sealed box.
 
 `SPK_W` / `SPK_H` default to **34 x 24** and are the one dimension here still
 waiting on a caliper — the speakers are accessories and are not in the STEP
@@ -131,9 +132,10 @@ Elecrow's repository, not measured by hand or taken from the spec sheet:
 - **Board outline** 247.04 × 147.01 mm
 - **Mounting holes** M3.2, four corners, 3.1 mm in from each edge
   (240.9 × 141.0 mm pattern)
-- **Every connector position** — all measured, but only the two USB-C ports,
-  the two buttons and the power switch are cut. `ALL_PORTS = false` near the
-  top of the `.scad` opens the rest if you ever want them:
+- **Every connector position** — all measured, but only the two USB-C ports
+  are cut into an edge. `ALL_PORTS = false` near the top of the `.scad` opens
+  the rest if you ever want them. All of these are **back-view** x values, and
+  are mirrored by `mx()` before cutting:
   - Right edge: XH2.54 at y=41.3, USB-C at y=63.0 and y=84.0, power switch at y=100.9
   - Top edge: Grove at x=18.1 and x=40.1, GPIO headers at x=215.5 and x=231.0
   - Bottom edge: PH2.0 at x=35.8, 2×12 header at x=123.9, test points at
@@ -142,29 +144,50 @@ Elecrow's repository, not measured by hand or taken from the spec sheet:
 
 Origin is the bottom-left corner of the board seen from the **front**.
 
-### The buttons and the switch are on the right edge, not the back
+### Which way round the board data is
 
-BOOT, RESET and the power slide switch all sit on the **same right-hand edge**
-as the two USB-C ports, so they get edge openings rather than holes in the back.
-Positions come from the STEP model, cross-checked against the two USB-C ports,
-which the model and the PCB file agree on to 0.6 mm:
+Every position here was read from Elecrow's Eagle PCB file, whose top view is
+the board's **component side** — which on a display board is the **back**. The
+model screenshot confirms it: the Grove pair (22 mm apart) on the left, the
+GPIO pair (15 mm apart) on the right, exactly as the file says, with the
+buttons and the power switch visible.
 
-| Board y | What |
-|---|---|
-| 19.8 | tactile button (K3 or K4), 5.2 mm body |
-| 34.3 | the other tactile button |
-| 44.9 | MST22D18G2 power slide switch |
-| 63.0, 84.0 | the two USB-C ports |
-| 103.7 | CN2, a 4-pin through-hole connector |
+But this `.scad` assembles with the screen facing +z — bezel on top, back plate
+at z = 0 — so its own x,y is a **front** view. The two are mirror images:
+looking at the finished case from behind, the model's +x is on your left while
+the board's +x is on your right.
 
-This **corrects the table below**: what it calls "J10 XH2.54-4P at 41.3" is the
-slide switch, and what it calls "SW1 power switch at 100.9" is CN2. The STEP
-model names its parts, so it wins over designators inferred from the PCB file.
+So every position taken from the PCB file is mirrored through `mx()` before it
+is cut. **Without this, all the openings came out on the wrong side**, which is
+what the earlier exports did.
 
-The second button and the switch share one opening. Their bodies end up 1.8 mm
-apart and no rib that thin is worth printing, so the merge is deliberate.
+> **Five-second check before you print:** stand the panel up facing you. The
+> two USB-C ports should be on your **left**. If they are on your right, set
+> `BOARD_DATA_IS_BACK_VIEW = false` and re-export.
 
-### One thing the back no longer opens
+### The controls face backwards, so they get back-plate slots
+
+Only the two USB-C ports are cut into an edge. BOOT, RESET and the power switch
+face out of the **back** of the board, so they get slots through the back plate:
+
+| Board x, y (back view) | Slot | What |
+|---|---|---|
+| 7.0, 25.0 | 13 x 34 | K3 + K4, one slot covering both buttons |
+| 240.5, 100.9 | 13 x 15 | SW1 power slide switch, with room to slide it |
+
+These are **slots, not close-fitting holes**, deliberately. The button
+positions come off a screenshot rather than a dimensioned drawing and are good
+to maybe 3 mm; the switch comes from the PCB file and is good to 0.1 mm. A slot
+a few mm oversize costs nothing; a hole in the wrong place cannot be undone.
+Tighten them once you can measure the real board.
+
+An earlier version of this file put all three on the right-hand edge, on the
+strength of a STEP transform chain that turned out to be wrong. That version
+also "corrected" the connector table below, claiming SW1 at y = 100.9 was
+really CN2. **That correction was itself wrong and has been reverted** — SW1 at
+y = 100.9 is the power switch, as the PCB file always said.
+
+### One thing the case no longer opens
 
 Worth knowing before you print, because both are sealed in once assembled:
 

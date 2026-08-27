@@ -109,7 +109,7 @@ BAY_DEPTH = 12;             // clear depth for the battery, floor to components
 
 // Flat 3.7 V LiPo. Sized for a 10000 mAh pack, which also swallows a 5000.
 // Common 10000 mAh packs run about 130 x 65 x 10; 5000 mAh about 100 x 55 x 8.
-BAT_W = 140; BAT_H = 75;    // footprint, with slack
+BAT_W = 132; BAT_H = 75;    // footprint, with slack
 BAT_FENCE = 8;              // rib height holding it in place
 BAT_X = (BOARD_W - BAT_W) / 2;
 BAT_Y = 66;                 // clear of the foot pads, which end at y = 63
@@ -118,8 +118,11 @@ BAT_Y = 66;                 // clear of the foot pads, which end at y = 63
 // one dimension here still waiting on a caliper. Generous by default.
 SPK_W = 34; SPK_H = 24;     // <-- MEASURE the speaker body
 SPK_FENCE = 6;
-speakers = [[30, 32], [217, 32]];   // centres, board coords: bottom corners,
-                                    // clear of both foot pads, stereo-spread
+// Up the sides rather than along the bottom: the foot pads own the bottom
+// band, and the two back-plate access slots own the corners near them. These
+// two are mirror images of each other (34 and 247.04 - 34), so the back stays
+// symmetric.
+speakers = [[34, 122], [213, 122]];
 
 
 // ---------------------------------------------------------------------------
@@ -164,28 +167,44 @@ TILT = 18;              // degrees off vertical
 // PCB file and are correct either way; this only decides which get cut.
 ALL_PORTS = false;
 
-// Right edge, positioned by Y (height up the board)
+// ---------------------------------------------------------------------------
+// WHICH WAY ROUND THE BOARD DATA IS
+//
+// Every position below was read from Elecrow's Eagle PCB file, whose top view
+// is the board's COMPONENT side -- which on a display board is the BACK. A
+// photo of the model confirms it: the Grove pair (22 mm apart) sits on the
+// left and the GPIO pair (15 mm apart) on the right, exactly as the file says,
+// with the buttons and the power switch visible. So these are BACK-view
+// coordinates.
+//
+// This file, though, assembles with the screen facing +z -- bezel on top, back
+// plate at z=0 -- so its own x,y is a FRONT view. The two are mirror images:
+// looking at the finished case from behind, this file's +x is on your LEFT
+// while the board's +x is on your RIGHT.
+//
+// So every position taken from the PCB file gets mirrored through mx() before
+// it is cut. Without this, all the openings come out on the wrong side.
+//
+// FIVE-SECOND CHECK: stand the panel up facing you. The two USB-C ports should
+// be on your LEFT. If they are on your right, set this false and re-export.
+BOARD_DATA_IS_BACK_VIEW = true;
+
+function mx(x) = BOARD_DATA_IS_BACK_VIEW ? BOARD_W - x : x;
+
+// Right edge of the BOARD DATA, positioned by Y (height up the board)
 usb_cuts = [
     [ 63.0, 14],    // J16  USB-C
     [ 84.0, 14],    // J1   USB-C
 ];
 
-// The BOOT button, the RESET button and the power slide switch are all on
-// this same right-hand edge -- not on the back. Positions come from the STEP
-// model and were cross-checked against the two USB-C ports, which the model
-// and the PCB file agree on to 0.6 mm.
+// BOOT, RESET and the power switch are NOT on this edge -- they face out of
+// the back of the board, so they get openings in the back plate instead. See
+// back_access below.
 //
-// Note this corrects the table below: what it calls "J10 XH2.54-4P at 41.3"
-// is the slide switch, and what it calls "SW1 power switch at 100.9" is the
-// 4-pin through-hole connector CN2. The STEP model names its parts, so it
-// wins over the designators I inferred from the PCB file.
-// The second button and the switch get ONE opening. Their bodies end up
-// 1.8 mm apart (button 31.7..36.9, switch 38.7..51.1) and no rib that thin is
-// worth printing, so the merge is deliberate rather than accidental.
-ctrl_cuts = [
-    [ 19.8, 10],    // K3/K4  tactile button, 5.2 mm body
-    [ 41.4, 24],    // K4/K3 tactile button + MST22D18G2 power slide switch
-];
+// An earlier version of this file put them on this edge, on the strength of a
+// STEP transform chain that turned out to be wrong. It also "corrected" the
+// designators below; that correction was itself wrong and has been reverted.
+// SW1 at y = 100.9 is the power switch, as the PCB file always said.
 
 right_cuts = [
     [ 41.3, 14],    // J10  XH2.54-4P
@@ -210,6 +229,27 @@ bottom_cuts = [
     [215.1, 12],    // J3   PH2.0 2-pin
     [231.0, 12],    // J6   PH2.0 2-pin
 ];
+
+// ---------------------------------------------------------------------------
+// Back-plate access for the controls that face backwards
+//
+// [x, y, w, h], centres in BOARD-DATA (back-view) coordinates, mirrored by
+// mx() like everything else.
+//
+// These are SLOTS, not close-fitting holes, on purpose. The button positions
+// come off a screenshot rather than a dimensioned drawing and are good to
+// perhaps 3 mm; the switch comes from the PCB file and is good to 0.1 mm. A
+// slot that is a few mm oversize costs nothing, and a hole in the wrong place
+// cannot be undone. Tighten them once you can measure the real board.
+back_access = [
+    [   7.0,  25.0, 13, 34],    // K3 + K4, one slot covering both buttons
+    [ 240.5, 100.9, 13, 15],    // SW1 power slide switch, room to slide it
+];
+
+// Where those slots actually land in this file's coordinates, after the
+// mirror. Exported so the geometry self-test can aim at them.
+BOOT_SLOT_X = mx(7.0);
+SW_SLOT_X   = mx(240.5);
 
 // Left edge, positioned by Y
 left_cuts = [
@@ -245,22 +285,39 @@ module edge_cutouts() {
     // slot most of the way down the side for no reason.
     z0 = PCB_Z - 3;
     depth = SHELL_D + 2;
-    // Right wall. Always the two USB-C ports; the rest only if asked for.
-    for (c = ALL_PORTS ? right_cuts : concat(usb_cuts, ctrl_cuts))
-        translate([BOARD_W + FIT_GAP - 1, c[0] - c[1]/2, z0])
+
+    // The board data's own x = BOARD_W edge. Mirrored, it lands on this
+    // model's LOW-x wall, which is why the ternary is here and not a typo.
+    hi = !BOARD_DATA_IS_BACK_VIEW;
+    for (c = ALL_PORTS ? right_cuts : usb_cuts)
+        translate([hi ? BOARD_W + FIT_GAP - 1 : -FIT_GAP - WALL - 2,
+                   c[0] - c[1]/2, z0])
             cube([WALL + 3, c[1], depth]);
-    // Left wall
+
+    // The board data's x = 0 edge, on the opposite wall.
     for (c = ALL_PORTS ? left_cuts : [])
-        translate([-FIT_GAP - WALL - 2, c[0] - c[1]/2, z0])
+        translate([hi ? -FIT_GAP - WALL - 2 : BOARD_W + FIT_GAP - 1,
+                   c[0] - c[1]/2, z0])
             cube([WALL + 3, c[1], depth]);
-    // Top wall
+
+    // Top and bottom walls keep their edge; only x is mirrored.
     for (c = ALL_PORTS ? top_cuts : [])
-        translate([c[0] - c[1]/2, BOARD_H + FIT_GAP - 1, z0])
+        translate([mx(c[0]) - c[1]/2, BOARD_H + FIT_GAP - 1, z0])
             cube([c[1], WALL + 3, depth]);
-    // Bottom wall
     for (c = ALL_PORTS ? bottom_cuts : [])
-        translate([c[0] - c[1]/2, -FIT_GAP - WALL - 2, z0])
+        translate([mx(c[0]) - c[1]/2, -FIT_GAP - WALL - 2, z0])
             cube([c[1], WALL + 3, depth]);
+}
+
+// Slots through the back plate for BOOT, RESET and the power switch.
+module back_access_slots() {
+    for (a = back_access) {
+        w = a[2]; h = a[3]; r = 3;
+        translate([mx(a[0]), a[1], -1])
+            hull()
+                for (dx = [-(w/2 - r), w/2 - r], dy = [-(h/2 - r), h/2 - r])
+                    translate([dx, dy, 0]) cylinder(r=r, h=WALL + 2, $fn=32);
+    }
 }
 
 // A rib fence rather than a closed box: it locates the part, uses almost no
@@ -347,6 +404,7 @@ module shell() {
                 cylinder(d1=6.6, d2=SCREW_CLR, h=1.6, $fn=32);
 
         speaker_grilles();
+        back_access_slots();
 
         // Foot screws: four per foot, matching foot()'s four holes. These are
         // CLEARANCE -- the screw drops in from inside the shell, through the

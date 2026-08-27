@@ -19,7 +19,7 @@ if not os.path.exists(OS):
 
 WANT = ["WALL", "BAY_DEPTH", "REAR_CLEARANCE", "PCB_Z", "SHELL_D", "BEZEL_T",
         "FRONT_GLASS", "INSERT_L", "BOARD_W", "BOARD_H", "FIT_GAP",
-        "BAT_X", "BAT_Y", "BAT_W", "BAT_H"]
+        "BAT_X", "BAT_Y", "BAT_W", "BAT_H", "BOOT_SLOT_X", "SW_SLOT_X"]
 NL = chr(10)
 open('_chk.scad', 'w').write(
     'PART="none";' + NL + 'include <tempest_stand.scad>' + NL
@@ -82,8 +82,14 @@ ok &= probe("battery fence stands on the plate (z=%.1f)" % (K["WALL"] + 4),
     slab("shell", K["BAT_X"] - 2.0, K["BAT_Y"] + 20, 1.5, K["WALL"] + 4), "SOLID")
 ok &= probe("battery bay floor is clear (z=%.1f)" % (K["WALL"] + 4),
     slab("shell", K["BAT_X"] + 20, K["BAT_Y"] + 20, 4, K["WALL"] + 4), "EMPTY")
+ok &= probe("BOOT/RESET slot is open through the back plate",
+    slab("shell", K["BOOT_SLOT_X"] - 2, 23, 4, K["WALL"] / 2), "EMPTY")
+ok &= probe("power switch slot is open through the back plate",
+    slab("shell", K["SW_SLOT_X"] - 2, 98.9, 4, K["WALL"] / 2), "EMPTY")
+ok &= probe("back plate is solid between the two slots",
+    slab("shell", K["BOOT_SLOT_X"] - 2, 60, 4, K["WALL"] / 2), "SOLID")
 ok &= probe("speaker grille is open through the plate (z=%.1f)" % (K["WALL"] / 2),
-    slab("shell", 29.2, 31.2, 1.6, K["WALL"] / 2), "EMPTY")
+    slab("shell", 33.2, 121.2, 1.6, K["WALL"] / 2), "EMPTY")
 
 # All four foot bolts per foot must be drilled, and drilled where the foot
 # actually presents its holes. FOOT_X is 0.28/0.72 of the board width; the

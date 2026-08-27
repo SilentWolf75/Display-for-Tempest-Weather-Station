@@ -117,13 +117,28 @@ PCB file and any hand measurement. It settles:
   area -0.20 (222.7 x 125.3), LCD module footprint -4.80 (235.5 x 143.5,
   centred), PCB front -4.90, PCB back -6.50 (so the PCB is 1.60), rear-most
   extent -19.62. Board rep is #5343, 247.00 x 147.00.
-- **Which part is which.** The .brd-derived table in `case/tempest_stand.scad`
-  had two designators swapped: the thing at y=41.3 on the right edge is the
-  MST22D18G2 power slide switch, and the thing at y=100.9 is CN2, a 4-pin
-  through-hole connector. The STEP names its parts, so it wins.
-- **BOOT and RESET** are tactile switches on the **right edge** at y = 19.8 and
-  34.3, alongside the switch at 44.9 and the two USB-C at 63.0 and 84.0. They
-  are not on the back.
+- **The board is 247.00 x 147.00** and the LCD module (235.5 x 143.5) is
+  centred on it, while the active area (222.7 x 125.3) is not.
+
+**The .brd coordinates are a BACK view.** Eagle's top view is the component
+side, which on a display board faces backwards. Confirmed against a render of
+the STEP model: the Grove pair sits left and the GPIO pair right, matching the
+.brd unmirrored, with BOOT/RESET and the power switch visible. `case/` assembles
+with the screen facing +z, so its own x,y is a FRONT view and every .brd
+position must be mirrored (`mx()` in `tempest_stand.scad`). Getting this wrong
+puts every opening on the wrong side, which is exactly what happened.
+
+**BOOT and RESET face out of the back**, near the .brd x=0 edge at roughly
+y = 16..34; the power switch is SW1 on the .brd x=247 edge at y = 100.9. They
+need back-plate openings, not edge cutouts.
+
+**Do not trust a hand-rolled STEP assembly traversal for part positions.** The
+attempt here produced two clusters of parts in frames 90 degrees apart and
+placed the power switch 59 mm from where it actually is; a "correction" to the
+.brd designators based on it was wrong and had to be reverted. There are no
+`MAPPED_ITEM` entities in this file at all, so any code handling them is dead.
+Layer heights off the board representation (#5343) were reliable; in-plane
+part positions were not. Cross-check against the .brd or a screenshot.
 
 Parsing notes, because this cost real time: part geometry is in LOCAL
 coordinates and placed by `MAPPED_ITEM` + `REPRESENTATION_MAP`, not only by
