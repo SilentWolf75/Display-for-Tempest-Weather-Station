@@ -1,8 +1,14 @@
 // Desk stand + back cover for the Elecrow CrowPanel Advance 10.1" (ESP32-P4).
 //
-// Two printed parts:
-//   shell()  - back cover, screws to the board's four M3 corner holes
+// Three printed parts:
+//   shell()  - back cover
+//   bezel()  - front frame, carries four M3x6x4.2 brass heat-set inserts
 //   foot()   - angled leg, x2, screws to the shell
+//
+// The four main screws enter from the BACK, pass through the shell, through
+// the board's own M3 corner holes, and thread into the brass inserts in the
+// bezel. Shell and bezel therefore clamp the board between them, and the
+// threads are in brass rather than in printed plastic.
 //
 // Every dimension below that starts "MEASURED" came out of Elecrow's own Eagle
 // PCB file for board revision V1.2:
@@ -81,8 +87,16 @@ SHELL_W = BOARD_W + 2*FIT_GAP + 2*WALL;     // ~253.8 -- fits a 270 mm bed
 SHELL_H = BOARD_H + 2*FIT_GAP + 2*WALL;     // ~153.8
 SHELL_D = REAR_CLEARANCE + WALL;
 
-BOSS_D    = 8;          // screw boss outside diameter
-BOSS_HOLE = 2.9;        // self-tapping pilot for M3; use 4.2 for heat-set
+BOSS_D    = 8;          // spacer boss outside diameter
+SCREW_CLR = 3.4;        // M3 clearance -- the screw passes THROUGH the shell
+
+// M3 x 6 x 4.2 brass heat-set insert, threaded into the BEZEL.
+// The screw enters from the back of the shell, passes through the board's own
+// corner hole, and threads into brass rather than into printed plastic.
+INSERT_D  = 4.2;        // outside diameter of the insert
+INSERT_L  = 6.0;        // length
+INSERT_FIT = -0.1;      // hole is slightly UNDER size; the brass melts its
+                        // own seat. Go to 0 if your printer runs tight.
 
 TILT = 18;              // degrees off vertical
 
@@ -165,65 +179,85 @@ module edge_cutouts() {
 module shell() {
     difference() {
         union() {
-            // Outer tray, positioned so board coordinates map directly.
-            translate([-FIT_GAP - WALL, -FIT_GAP - WALL, 0])
-                rounded_box(SHELL_W, SHELL_H, SHELL_D, CORNER_R);
-            // Screw bosses rise to meet the board.
+            // Tray first, hollowed on its own. The cavity has to be subtracted
+            // BEFORE the bosses go in -- the bosses stand inside the board
+            // footprint, so a cavity cut afterwards would erase them.
+            difference() {
+                translate([-FIT_GAP - WALL, -FIT_GAP - WALL, 0])
+                    rounded_box(SHELL_W, SHELL_H, SHELL_D, CORNER_R);
+                translate([-FIT_GAP, -FIT_GAP, WALL])
+                    cube([BOARD_W + 2*FIT_GAP, BOARD_H + 2*FIT_GAP, SHELL_D]);
+                edge_cutouts();
+                vent_grid();
+            }
+
+            // Bosses rise off the back plate to meet the PCB. They set the
+            // rear clearance and the screw passes straight through them.
             for (h = holes)
                 translate([h[0], h[1], WALL])
                     cylinder(d=BOSS_D, h=REAR_CLEARANCE, $fn=48);
-            // Mounting pads for the feet.
+
+            // Mounting pads for the feet, on the outside of the back plate.
             for (fx = [BOARD_W*0.25, BOARD_W*0.75])
                 translate([fx - 20, 12, WALL]) cube([40, 16, 3]);
         }
 
-        // Board cavity
-        translate([-FIT_GAP, -FIT_GAP, WALL])
-            cube([BOARD_W + 2*FIT_GAP, BOARD_H + 2*FIT_GAP, SHELL_D]);
-
-        // Blind pilot holes in the bosses. Screws now enter from the FRONT
-        // through the bezel and the board, so the outside of the shell stays
-        // unbroken -- no screw heads on the back of a desk ornament.
+        // Clearance right through: the screw enters here, at the back.
         for (h = holes)
-            translate([h[0], h[1], WALL + 1])
-                cylinder(d=BOSS_HOLE, h=REAR_CLEARANCE, $fn=32);
+            translate([h[0], h[1], -1])
+                cylinder(d=SCREW_CLR, h=SHELL_D + 4, $fn=32);
 
-        edge_cutouts();
-        vent_grid();
+        // Countersink on the OUTSIDE so the head finishes flush with the back.
+        for (h = holes)
+            translate([h[0], h[1], -0.01])
+                cylinder(d1=6.6, d2=SCREW_CLR, h=1.6, $fn=32);
 
         // Foot screw pilots
         for (fx = [BOARD_W*0.25, BOARD_W*0.75])
             for (dx = [-13, 13])
                 translate([fx + dx, 20, -1])
-                    cylinder(d=BOSS_HOLE, h=WALL + 6, $fn=24);
+                    cylinder(d=2.9, h=WALL + 6, $fn=24);
     }
 }
 
 // ---------------------------------------------------------------------------
 // Front bezel
 //
-// Sandwiches the board against the shell. The SAME four M3 screws pass through
-// the bezel, through the board's corner holes, and thread into the shell's
-// bosses -- so no extra fixings and no widening the shell past the print bed.
+// Sandwiches the board against the shell. Four M3 x 6 x 4.2 brass heat-set
+// inserts live in bosses on the BACK of this part; the screws come the other
+// way, up through the shell and the board's own corner holes, into the brass.
+// So: no extra fixings, no widening the shell past the print bed, no threads
+// cut in printed plastic, and nothing visible from the front.
 //
 // The inner edge is chamfered away from the screen so the frame does not cast
 // a shadow line across the picture at an angle.
 // ---------------------------------------------------------------------------
 
-BEZEL_T    = 3.2;       // face thickness in front of the glass
+BEZEL_T    = 4.5;       // face thickness in front of the glass. Deep enough
+                        // that a 6 mm insert still leaves 2 mm of solid skin.
 BEZEL_LIP  = 1.2;       // how far the frame overlaps onto the glass
 
 module bezel() {
     difference() {
         union() {
-            // Outer plate, matching the shell footprint exactly.
-            translate([-FIT_GAP - WALL, -FIT_GAP - WALL, 0])
-                rounded_box(SHELL_W, SHELL_H, BEZEL_T + FRONT_GLASS, CORNER_R);
-        }
+            // Plate first, with the glass relief already taken out of it. The
+            // relief has to be cut BEFORE the bosses are added -- the bosses
+            // stand inside the relief, so cutting it afterwards erases them.
+            difference() {
+                translate([-FIT_GAP - WALL, -FIT_GAP - WALL, 0])
+                    rounded_box(SHELL_W, SHELL_H, BEZEL_T + FRONT_GLASS, CORNER_R);
+                translate([-FIT_GAP, -FIT_GAP, BEZEL_T])
+                    cube([BOARD_W + 2*FIT_GAP, BOARD_H + 2*FIT_GAP,
+                          FRONT_GLASS + 1]);
+            }
 
-        // Relief so the frame sits on the glass, not on the PCB.
-        translate([-FIT_GAP, -FIT_GAP, BEZEL_T])
-            cube([BOARD_W + 2*FIT_GAP, BOARD_H + 2*FIT_GAP, FRONT_GLASS + 1]);
+            // Bosses carrying the inserts. They stand down through the glass
+            // relief and land on the PCB at the corners, well clear of the
+            // active area, so they also set how hard the glass is squeezed.
+            for (h = holes)
+                translate([h[0], h[1], BEZEL_T])
+                    cylinder(d=INSERT_D + 3.2, h=FRONT_GLASS, $fn=48);
+        }
 
         // The window, with a chamfer opening outward.
         translate([ACTIVE_X + BEZEL_LIP, ACTIVE_Y + BEZEL_LIP, -1])
@@ -231,13 +265,12 @@ module bezel() {
         translate([ACTIVE_X + BEZEL_LIP, ACTIVE_Y + BEZEL_LIP, -0.01])
             chamfer_frame(ACTIVE_W - 2*BEZEL_LIP, ACTIVE_H - 2*BEZEL_LIP, 1.6);
 
-        // Screw clearance + counterbore at the four corners.
-        for (h = holes) {
-            translate([h[0], h[1], -1])
-                cylinder(d=3.4, h=BEZEL_T + FRONT_GLASS + 2, $fn=32);
-            translate([h[0], h[1], -0.1])
-                cylinder(d1=6.6, d2=3.4, h=2.0, $fn=32);
-        }
+        // Blind pockets for the heat-set inserts, opened from the BACK. The
+        // pocket stops BEZEL_T + FRONT_GLASS - INSERT_L above the front face,
+        // so nothing breaks through and the front stays unmarked.
+        for (h = holes)
+            translate([h[0], h[1], BEZEL_T + FRONT_GLASS - INSERT_L])
+                cylinder(d=INSERT_D + INSERT_FIT, h=INSERT_L + 0.2, $fn=32);
     }
 }
 
@@ -303,14 +336,27 @@ module foot() {
 
 // ---------------------------------------------------------------------------
 // Preview / export
-//   Set PART to "shell", "foot", or "preview".
+//   Set PART to "shell", "bezel", "foot", or "preview".
 // ---------------------------------------------------------------------------
 
 PART = "preview";
 
+// Fastener report. These follow the constants above, so if you change a
+// measurement the numbers change with it -- read them off the console rather
+// than trusting the README.
+PCB_ONLY   = BOARD_THICK - FRONT_GLASS;             // PCB without the glass
+SCREW_MIN  = WALL + REAR_CLEARANCE + PCB_ONLY;      // just reaches the insert
+SCREW_MAX  = SCREW_MIN + INSERT_L + 0.2;            // bottoms out in the bezel
+echo(str("M3 screw: at least ", SCREW_MIN, " mm to reach the insert, ",
+         "at most ", SCREW_MAX, " mm before it bottoms out. Use ",
+         SCREW_MIN + 4, "-", SCREW_MIN + 6, " mm."));
+echo(str("Bezel front skin over each insert: ",
+         BEZEL_T + FRONT_GLASS - INSERT_L, " mm"));
+
 if (PART == "shell") shell();
 else if (PART == "foot") foot();
 else if (PART == "bezel") bezel();
+else if (PART == "none") ;   // render nothing; for scripts that include this file
 else {
     // Assembled on a desk, seen from behind.
     //
@@ -327,10 +373,13 @@ else {
 
     color("#3a4453") rotate([90 - TILT, 0, 0]) shell();
 
-    // Bezel, flipped to face the viewer and set forward by the board stack.
+    // Bezel, flipped to face the viewer and set forward by the whole board
+    // stack PLUS its own face thickness: after mirror([0,0,1]) a bezel point
+    // at local z lands at (T - z), so T must be the height of the bezel's
+    // OUTER face, not of the glass it rests on.
     color("#59636f")
         rotate([90 - TILT, 0, 0])
-            translate([0, 0, WALL + REAR_CLEARANCE + BOARD_THICK])
+            translate([0, 0, WALL + REAR_CLEARANCE + BOARD_THICK + BEZEL_T])
                 mirror([0, 0, 1]) bezel();
 
     // Desk, for scale.

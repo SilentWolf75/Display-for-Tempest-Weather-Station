@@ -2,33 +2,74 @@
 
 For the Elecrow CrowPanel Advance 10.1" (ESP32-P4), board revision **V1.2**.
 
-Two printed parts: a back shell that screws to the board's four M3 corner
-holes, and two wedge feet that bolt to the shell and lean it back 18°.
+Three printed parts: a back shell, a front bezel, and two wedge feet that bolt
+to the shell and lean it back 18°.
+
+Shell and bezel clamp the board between them. The four M3 screws go in from the
+**back**, pass through the shell, through the board's own M3 corner holes, and
+thread into **M3 x 6 x 4.2 brass heat-set inserts** in the bezel. So the threads
+are in brass rather than printed plastic, and nothing shows on the front.
 
 | File | What it is |
 |---|---|
 | `tempest_stand.scad` | The source. Parametric — change one number and re-export. |
 | `tempest_shell.stl` | Back cover, 1 off |
+| `tempest_bezel.stl` | Front bezel, 1 off |
 | `tempest_foot.stl` | Wedge foot, **2 off** |
-| `preview.png`, `shell.png`, `foot.png` | Renders |
+| `check_geometry.py` | Geometry self-test — run it after changing any constant |
+| `preview.png`, `bezel.png`, `shell.png`, `foot.png` | Renders |
+
+## Hardware
+
+| Qty | Part |
+|---|---|
+| 4 | M3 x 6 mm x 4.2 mm OD brass heat-set inserts |
+| 4 | M3 countersunk screws, **20 mm** (see below) |
+| 4 | M3 x 12 mm, any head, for the feet |
+
+Screw length is worked out from your measurements rather than assumed. Run:
+
+```bash
+openscad -o /dev/null -D 'PART="none"' tempest_stand.scad
+```
+
+and it prints the window, e.g. *"at least 15.9 mm to reach the insert, at most
+22.1 mm before it bottoms out."* Too long is the failure that matters: the screw
+bottoms in a blind pocket with only 2 mm of bezel left above it, and keeping
+turning cracks the front face. **Do not fit 25 mm.**
 
 ## Measure this before you print
 
+Four numbers are guesses. Everything else came out of Elecrow's own Eagle PCB
+file and is good to about 0.1 mm — but that file carries no component heights
+and no panel outline, so these cannot be read from it.
+
+| Constant | Default | How to measure it |
+|---|---|---|
+| `REAR_CLEARANCE` | 11.0 | Straight edge across the **back**, gap to the tallest thing on it — usually the C6 module can or a connector body. Add 1.5 mm of air. |
+| `FRONT_GLASS` | 3.5 | Straight edge across the **front**, down to the PCB. How far the glass stands proud. |
+| `BOARD_THICK` | 6.0 | Total, glass face to back of PCB. Only sets screw length. |
+| `ACTIVE_W` / `ACTIVE_H` | 225.3 x 133.7 | Power the panel on and measure the **lit** rectangle. |
+
+`REAR_CLEARANCE` too small bows the board as you tighten; too large and the
+shell stands proud of the edges.
+
+`FRONT_GLASS` is what stops the bezel rocking — the frame is recessed by this
+much so it lands on glass, not on the PCB.
+
+The active-area default is the area implied by a 10.1" diagonal at 1024x600
+(221.3 x 129.7 mm), plus 2 mm of safety all round, assumed centred. It is
+**deliberately generous**, and the error is asymmetric: too large shows a sliver
+of PCB, too small covers pixels and cannot be undone once printed. Measure the
+lit area and tighten it if you want a chunkier frame.
+
+After changing anything, re-run the self-test — it catches the failure mode this
+design is prone to, where a pocket cut in the wrong order silently deletes a
+boss:
+
+```bash
+python check_geometry.py
 ```
-REAR_CLEARANCE = 11.0;      // line 29 of tempest_stand.scad
-```
-
-This is the only dimension in the design that is a guess. Everything else came
-out of Elecrow's own Eagle PCB file and is good to about 0.1 mm; component
-heights are simply not in that file.
-
-Lay a straight edge across the back of the board and measure the gap to the
-tallest thing standing on it — usually the ESP32-C6 module can or a connector
-body. Add 1.5 mm of air, put the result on that line, and re-export the shell.
-
-Too small and the shell will bow the board when you tighten the screws. Too
-large and it will stand proud of the edges. Nothing else depends on it, so
-this is a one-number fix.
 
 ## Where the numbers came from
 
@@ -57,8 +98,9 @@ temperature sensor plugs into, so that cutout matters.
 not diagonally, and one at a time.
 
 - Shell: flat on the bed, open side up. No supports.
-- Bezel: face down on the bed, so the visible front is the smooth first layer
-  and the chamfer around the window is self-supporting.
+- Bezel: **face down** on the bed, so the visible front is the smooth first
+  layer, the chamfer around the window is self-supporting, and the insert
+  bosses print upward as solid pillars.
 - 0.2 mm layers, 3 walls, 15% infill.
 - PETG or ASA if it will sit in sunlight. **Not PLA** — a weather panel in a
   window gets hot enough to sag it.
@@ -68,21 +110,28 @@ not diagonally, and one at a time.
 
 ## Assembly
 
-1. Drop the board into the shell, face up.
-2. Lay the bezel on top and drive four **M3 countersunk** screws down through
-   the bezel, through the board's corner holes, into the shell's bosses. Length
-   ≈ `BEZEL_T + FRONT_GLASS + BOARD_THICK + 6`, so about **20 mm** at the
-   defaults. The counterbores are modelled so the heads sit flush.
-3. Four **M3 × 12 mm** into the feet, two per foot, through the pads on the
+1. **Inserts first, bezel face down on the bench.** Press the four brass
+   inserts into the bosses on the back of the bezel with a soldering iron at
+   about 220 °C and a flat or insert tip. Go slowly and let the plastic melt
+   rather than pushing. Stop when the flange is flush with the boss — the
+   pocket is 6.2 mm deep for a 6 mm insert, so there is nowhere for a
+   proud insert to hide.
+2. Check each one is **square** before it cools. Sighting across the bezel is
+   enough; a leaning insert will not accept the screw later, and reheating to
+   fix it is much harder than getting it right now.
+3. Lay the board into the bezel, face down, so the glass sits in the relief and
+   the four bosses land on the PCB at the corners.
+4. Drop the shell over the back. The bosses inside it should meet the PCB.
+5. Drive the four **M3 countersunk** screws in from the back. They pass through
+   the shell, through the board, into the brass.
+6. Four **M3 × 12 mm** into the feet, two per foot, through the pads on the
    shell's back.
-4. Route the USB-C power cable out of the right-edge cutout.
+7. Route the USB-C power cable out of the right-edge cutout.
 
-Tighten the four main screws gradually and in a diagonal order. They are
-clamping a glass-fronted panel, and doing one corner fully first is how you
-crack one.
-
-Self-tapping into printed plastic works fine at these loads. If you would
-rather use heat-set inserts, change `BOSS_HOLE` from 2.9 to 4.2 and re-export.
+Tighten the four main screws **gradually and in a diagonal order**. They are
+clamping a glass-fronted panel, and taking one corner fully home first is how
+you crack one. Stop as soon as they are snug — the boss height, not the screw
+torque, is what sets the clamp.
 
 ## Adjusting
 
