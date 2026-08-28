@@ -122,7 +122,7 @@ static void poll_nws_alerts(void)
 
     char url[256];
     snprintf(url, sizeof(url),
-             "https://api.weather.gov/alerts/active?point=%.4f,%.4f&status=actual&message_type=alert&limit=2", lat, lon);
+             "https://api.weather.gov/alerts/active?point=%.4f,%.4f", lat, lon);
 
     char *resp_buf = heap_caps_malloc(HTTP_BUF_SIZE, MALLOC_CAP_SPIRAM);
     if (!resp_buf) return;

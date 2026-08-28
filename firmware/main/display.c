@@ -1,5 +1,6 @@
 #include "display.h"
 #include "board_pins.h"
+#include "config.h"
 
 #include "esp_log.h"
 #include "esp_check.h"
@@ -52,7 +53,7 @@ static esp_err_t init_backlight(void)
         .speed_mode      = LEDC_LOW_SPEED_MODE,
         .timer_num       = BACKLIGHT_LEDC_TIMER,
         .duty_resolution = BACKLIGHT_DUTY_RES,
-        .freq_hz         = BACKLIGHT_FREQ_HZ,
+        .freq_hz         = BOARD_LCD_BACKLIGHT_FREQ_HZ,
         .clk_cfg         = LEDC_AUTO_CLK,
     };
     ESP_RETURN_ON_ERROR(ledc_timer_config(&timer), TAG, "ledc timer");
@@ -310,7 +311,7 @@ esp_err_t display_init(void)
     ESP_RETURN_ON_ERROR(init_lvgl(),      TAG, "lvgl");
 
     /* Turn the light on only after there is something to look at. */
-    display_set_brightness(100);
+    display_set_brightness(cfg_brightness_now());
     return ESP_OK;
 }
 

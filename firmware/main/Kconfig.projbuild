@@ -19,11 +19,11 @@ menu "Tempest Weather Display"
 
     config TEMPEST_WIFI_SSID
         string "Wi-Fi SSID"
-        default "changeme"
+        default ""
 
     config TEMPEST_WIFI_PASSWORD
         string "Wi-Fi password"
-        default "changeme"
+        default ""
 
     config TEMPEST_STATION_ID
         int "Tempest station ID"

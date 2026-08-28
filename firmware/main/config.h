@@ -12,6 +12,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 #include "esp_err.h"
 
 typedef enum {
@@ -67,8 +68,15 @@ esp_err_t cfg_reset(void);
  * net_apply_credentials() for that. */
 esp_err_t cfg_set_wifi(const char *ssid, const char *password);
 
-/* True once an SSID has been set, from either NVS or secrets.h. */
+/* True once a real SSID has been set, from either NVS or secrets.h. */
 bool cfg_has_wifi(void);
+
+/* Rejects empty strings and the Kconfig "changeme" placeholder. */
+bool cfg_wifi_ssid_usable(const char *ssid);
+
+/* Day or night brightness from the current local hour. Falls back to day
+ * brightness when the clock has not synced yet. */
+uint8_t cfg_brightness_now(void);
 
 /* True when the local hour falls inside the configured night window.
  * Handles windows that wrap past midnight, which is the normal case. */

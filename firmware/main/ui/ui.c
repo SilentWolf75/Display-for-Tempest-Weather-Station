@@ -925,22 +925,19 @@ static void on_page_btn(lv_event_t *e)
 
 static void apply_brightness(int64_t now)
 {
-    static int last_minute = -1;
+    static int last_hour = -1;
     if (now < 1700000000LL && !net_time_is_valid()) {
         return;
     }
     time_t t = (time_t)now;
     struct tm lt;
     localtime_r(&t, &lt);
-    if (lt.tm_min == last_minute) {
+    if (lt.tm_hour == last_hour) {
         return;
     }
-    last_minute = lt.tm_min;
+    last_hour = lt.tm_hour;
 
-    cfg_t c;
-    cfg_get(&c);
-    display_set_brightness(cfg_is_night(lt.tm_hour) ? c.brightness_night
-                                                    : c.brightness_day);
+    display_set_brightness(cfg_brightness_now());
 }
 
 esp_err_t ui_init(void)
