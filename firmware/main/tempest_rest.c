@@ -1,3 +1,5 @@
+#include "config.h"
+#include "net.h"
 #include "tempest_rest.h"
 #include "wx_state.h"
 #include "history.h"
@@ -15,18 +17,12 @@
 #include "esp_heap_caps.h"
 #include "cJSON.h"
 
-#if __has_include("secrets.h")
 #include "secrets.h"
-#else
-#warning "secrets.h not found -- copy secrets.h.example to secrets.h and add \
-your Tempest personal access token. The forecast poll will be skipped."
-#define TEMPEST_API_TOKEN ""
-#endif
 
 static const char *TAG = "tempest_rest";
 
-#define RESP_MAX_BYTES   (24 * 1024)
-#define TASK_STACK       8192
+#define RESP_MAX_BYTES   (192 * 1024)
+#define TASK_STACK       16384
 #define TASK_PRIO        4
 #define BACKOFF_S        1800
 
@@ -39,16 +35,16 @@ static const char *TAG = "tempest_rest";
 #define STATIONS_BUF_BYTES    (16 * 1024)
 
 #define STATIONS_URL_FMT \
-    "https://swd.weatherflow.com/swd/rest/stations/%d?token=%s"
+    "http://swd.weatherflow.com/swd/rest/stations/%d?token=%s"
 
 #define OBS_URL_FMT \
-    "https://swd.weatherflow.com/swd/rest/observations/" \
+    "http://swd.weatherflow.com/swd/rest/observations/" \
     "?device_id=%d&type=obs_st&time_start=%lld&time_end=%lld&token=%s"
 
 
 /* Metric on the wire so wx_state stays SI; the UI converts for display. */
 #define FORECAST_URL_FMT \
-    "https://swd.weatherflow.com/swd/rest/better_forecast" \
+    "http://swd.weatherflow.com/swd/rest/better_forecast" \
     "?station_id=%d&units_temp=c&units_wind=mps&units_pressure=mb" \
     "&units_precip=mm&units_distance=km&token=%s"
 
@@ -162,16 +158,233 @@ static esp_err_t parse_forecast(const char *json, int len)
     return ESP_OK;
 }
 
+
+static const char *wmo_to_conditions(int code)
+{
+    switch (code) {
+    case 0: return "Clear";
+    case 1: return "Mainly Clear";
+    case 2: return "Partly Cloudy";
+    case 3: return "Overcast";
+    case 45: case 48: return "Fog";
+    case 51: case 53: case 55: return "Drizzle";
+    case 61: case 63: case 65: return "Rain";
+    case 71: case 73: case 75: return "Snow";
+    case 77: return "Snow Grains";
+    case 80: case 81: case 82: return "Rain Showers";
+    case 85: case 86: return "Snow Showers";
+    case 95: case 96: case 99: return "Thunderstorm";
+    default: return "Partly Cloudy";
+    }
+}
+
+static const char *wmo_to_icon(int code)
+{
+    switch (code) {
+    case 0: return "clear-day";
+    case 1: case 2: return "partly-cloudy-day";
+    case 3: return "cloudy";
+    case 45: case 48: return "fog";
+    case 51: case 53: case 55:
+    case 56: case 57:
+    case 61: case 63: case 65:
+    case 66: case 67:
+    case 80: case 81: case 82: return "rainy";
+    case 71: case 73: case 75:
+    case 77: case 85: case 86: return "snow";
+    case 95: case 96: case 99: return "possibly-thunderstorm-day";
+    default: return "partly-cloudy-day";
+    }
+}
+
+static time_t parse_iso_time(const char *str)
+{
+    if (!str || strlen(str) < 10) return 0;
+    struct tm tm = {0};
+    int yr = 0, mon = 0, day = 0, hr = 0, min = 0;
+    if (sscanf(str, "%d-%d-%dT%d:%d", &yr, &mon, &day, &hr, &min) >= 3) {
+        tm.tm_year = yr - 1900;
+        tm.tm_mon  = mon - 1;
+        tm.tm_mday = day;
+        tm.tm_hour = hr;
+        tm.tm_min  = min;
+        return mktime(&tm);
+    }
+    return 0;
+}
+
+static esp_err_t fetch_open_meteo_forecast(const char *zipcode)
+{
+    if (!zipcode || strlen(zipcode) < 5) return ESP_FAIL;
+
+    /* 1. Geocode Zip to Lat/Lon */
+    char zip_url[128];
+    snprintf(zip_url, sizeof(zip_url), "http://api.zippopotam.us/us/%s", zipcode);
+
+    char *resp_buf = malloc(RESP_MAX_BYTES);
+    if (!resp_buf) return ESP_ERR_NO_MEM;
+    resp_buf[0] = '\0';
+
+    resp_accum_t acc = { .buf = resp_buf, .len = 0, .cap = RESP_MAX_BYTES };
+
+    esp_http_client_config_t http_cfg = {
+        .url = zip_url,
+        .event_handler = http_event,
+        .user_data = &acc,
+        .timeout_ms = 8000,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+    if (!client) {
+        free(resp_buf);
+        return ESP_FAIL;
+    }
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    float lat = 0.0f, lon = 0.0f;
+    if (err == ESP_OK && status == 200 && acc.len > 0) {
+        cJSON *root = cJSON_Parse(resp_buf);
+        if (root) {
+            cJSON *places = cJSON_GetObjectItemCaseSensitive(root, "places");
+            if (cJSON_IsArray(places) && cJSON_GetArraySize(places) > 0) {
+                cJSON *p0 = cJSON_GetArrayItem(places, 0);
+                cJSON *lat_obj = cJSON_GetObjectItemCaseSensitive(p0, "latitude");
+                cJSON *lon_obj = cJSON_GetObjectItemCaseSensitive(p0, "longitude");
+                if (lat_obj && lon_obj) {
+                    lat = (float)atof(lat_obj->valuestring);
+                    lon = (float)atof(lon_obj->valuestring);
+                }
+            }
+            cJSON_Delete(root);
+        }
+    }
+
+    if (lat == 0.0f && lon == 0.0f) {
+        free(resp_buf);
+        return ESP_FAIL;
+    }
+
+    /* 2. Query 7-Day Forecast from Open-Meteo */
+    char fc_url[256];
+    snprintf(fc_url, sizeof(fc_url),
+             "http://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
+             "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
+             "precipitation_probability_max,sunrise,sunset&timezone=auto",
+             lat, lon);
+
+    acc.len = 0;
+    resp_buf[0] = '\0';
+
+    esp_http_client_config_t fc_cfg = {
+        .url = fc_url,
+        .event_handler = http_event,
+        .user_data = &acc,
+        .timeout_ms = 10000,
+    };
+
+    client = esp_http_client_init(&fc_cfg);
+    if (!client) {
+        free(resp_buf);
+        return ESP_FAIL;
+    }
+    err = esp_http_client_perform(client);
+    status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK || status != 200 || acc.len == 0) {
+        ESP_LOGE(TAG, "Open-Meteo forecast HTTP failed: %d, err %s", status, esp_err_to_name(err));
+        free(resp_buf);
+        return ESP_FAIL;
+    }
+
+    cJSON *root = cJSON_Parse(resp_buf);
+    free(resp_buf);
+    if (!root) {
+        ESP_LOGE(TAG, "failed to parse Open-Meteo JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *daily = cJSON_GetObjectItemCaseSensitive(root, "daily");
+    if (!cJSON_IsObject(daily)) {
+        cJSON_Delete(root);
+        return ESP_FAIL;
+    }
+
+    cJSON *time_arr = cJSON_GetObjectItemCaseSensitive(daily, "time");
+    cJSON *tmax_arr = cJSON_GetObjectItemCaseSensitive(daily, "temperature_2m_max");
+    cJSON *tmin_arr = cJSON_GetObjectItemCaseSensitive(daily, "temperature_2m_min");
+    cJSON *code_arr = cJSON_GetObjectItemCaseSensitive(daily, "weather_code");
+    cJSON *pop_arr  = cJSON_GetObjectItemCaseSensitive(daily, "precipitation_probability_max");
+    cJSON *sr_arr   = cJSON_GetObjectItemCaseSensitive(daily, "sunrise");
+    cJSON *ss_arr   = cJSON_GetObjectItemCaseSensitive(daily, "sunset");
+
+    if (!cJSON_IsArray(time_arr) || !cJSON_IsArray(tmax_arr) || !cJSON_IsArray(tmin_arr)) {
+        cJSON_Delete(root);
+        return ESP_FAIL;
+    }
+
+    wx_state_t p = {0};
+    int count = cJSON_GetArraySize(time_arr);
+    if (count > WX_FORECAST_DAYS) count = WX_FORECAST_DAYS;
+
+    for (int i = 0; i < count; i++) {
+        wx_forecast_day_t *d = &p.forecast[i];
+        cJSON *t_item = cJSON_GetArrayItem(time_arr, i);
+        cJSON *hi_item = cJSON_GetArrayItem(tmax_arr, i);
+        cJSON *lo_item = cJSON_GetArrayItem(tmin_arr, i);
+        cJSON *cd_item = code_arr ? cJSON_GetArrayItem(code_arr, i) : NULL;
+        cJSON *pop_item = pop_arr ? cJSON_GetArrayItem(pop_arr, i) : NULL;
+
+        if (t_item && cJSON_IsString(t_item)) {
+            d->day_start_local = parse_iso_time(t_item->valuestring);
+        }
+        if (hi_item && cJSON_IsNumber(hi_item)) {
+            d->air_temp_high_c = (float)hi_item->valuedouble;
+        }
+        if (lo_item && cJSON_IsNumber(lo_item)) {
+            d->air_temp_low_c = (float)lo_item->valuedouble;
+        }
+        if (pop_item && cJSON_IsNumber(pop_item)) {
+            d->precip_probability = (int)pop_item->valuedouble;
+        }
+        int code = (cd_item && cJSON_IsNumber(cd_item)) ? cd_item->valueint : 0;
+        strncpy(d->conditions, wmo_to_conditions(code), sizeof(d->conditions) - 1);
+        strncpy(d->icon, wmo_to_icon(code), sizeof(d->icon) - 1);
+
+        if (i == 0) {
+            strncpy(p.current_conditions, d->conditions, sizeof(p.current_conditions) - 1);
+            strncpy(p.current_icon, d->icon, sizeof(p.current_icon) - 1);
+            cJSON *sr_item = sr_arr ? cJSON_GetArrayItem(sr_arr, 0) : NULL;
+            cJSON *ss_item = ss_arr ? cJSON_GetArrayItem(ss_arr, 0) : NULL;
+            if (sr_item && cJSON_IsString(sr_item)) p.sunrise_epoch = parse_iso_time(sr_item->valuestring);
+            if (ss_item && cJSON_IsString(ss_item)) p.sunset_epoch  = parse_iso_time(ss_item->valuestring);
+        }
+    }
+
+    p.forecast_days = count;
+    cJSON_Delete(root);
+
+    wx_update_forecast(&p);
+    ESP_LOGI(TAG, "Open-Meteo forecast updated: %d days (Today: %.1fC / %.1fC, %s)",
+             p.forecast_days, p.forecast[0].air_temp_high_c, p.forecast[0].air_temp_low_c, p.current_conditions);
+    return ESP_OK;
+}
+
 esp_err_t tempest_rest_fetch_now(void)
 {
+    cfg_t c;
+    cfg_get(&c);
+
     if (TEMPEST_API_TOKEN[0] == '\0') {
-        ESP_LOGW(TAG, "no API token configured, skipping forecast");
-        return ESP_ERR_INVALID_STATE;
+        /* No Tempest API key configured -> Use Open-Meteo 7-Day Forecast Engine */
+        return fetch_open_meteo_forecast(c.alert_zipcode);
     }
 
     char *url = malloc(512);
-    resp_accum_t acc = { .buf = malloc(RESP_MAX_BYTES), .len = 0,
-                         .cap = RESP_MAX_BYTES };
+    resp_accum_t acc = { .buf = heap_caps_malloc(RESP_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT),
+                         .len = 0, .cap = RESP_MAX_BYTES };
     if (!url || !acc.buf) {
         free(url);
         free(acc.buf);
@@ -408,20 +621,23 @@ static void rest_task(void *arg)
 {
     (void)arg;
 
-    /* Once, before the forecast loop: populate the graphs so they are
-     * useful immediately instead of after a day of collecting. Failing is
-     * fine -- they just start empty, which was the previous behaviour. */
+    while (!net_is_connected()) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    /* 1. Fetch 7-day Better Forecast first so screen updates immediately */
+    esp_err_t err = tempest_rest_fetch_now();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "initial forecast fetch failed, retrying in 15s");
+    }
+
+    /* 2. Then backfill history for trend graphs */
     tempest_rest_backfill_history();
 
     while (1) {
-        esp_err_t err = tempest_rest_fetch_now();
-        int delay_s = (err == ESP_OK)
-                    ? CONFIG_TEMPEST_FORECAST_INTERVAL_S
-                    : BACKOFF_S;
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "backing off %d s before retrying", delay_s);
-        }
-        vTaskDelay(pdMS_TO_TICKS(delay_s * 1000));
+        vTaskDelay(pdMS_TO_TICKS(CONFIG_TEMPEST_FORECAST_INTERVAL_S * 1000));
+        tempest_rest_fetch_now();
     }
 }
 

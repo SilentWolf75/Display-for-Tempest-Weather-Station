@@ -103,10 +103,9 @@ static char *load_json(const char *slug, size_t *out_len)
         return NULL;
     }
 
-    /* PSRAM: these are tens of KB and never DMA'd. */
-    char *buf = heap_caps_malloc((size_t)len + 1, MALLOC_CAP_SPIRAM);
+    char *buf = malloc((size_t)len + 1);
     if (!buf) {
-        ESP_LOGE(TAG, "no PSRAM for %s (%ld bytes)", slug, len);
+        ESP_LOGE(TAG, "no RAM for %s (%ld bytes)", slug, len);
         fclose(f);
         return NULL;
     }
@@ -129,8 +128,8 @@ static void icon_delete_cb(lv_event_t *e)
     if (!ctx) {
         return;
     }
-    free(ctx->pixels);
-    free(ctx->json);
+    if (ctx->pixels) free(ctx->pixels);
+    if (ctx->json)   free(ctx->json);
     free(ctx);
 }
 
@@ -145,9 +144,9 @@ lv_obj_t *wx_icon_create(lv_obj_t *parent, int size, bool animate)
 
     /* ThorVG renders into ARGB8888 regardless of the display colour format. */
     size_t px_bytes = (size_t)size * (size_t)size * 4u;
-    ctx->pixels = heap_caps_malloc(px_bytes, MALLOC_CAP_SPIRAM);
+    ctx->pixels = malloc(px_bytes);
     if (!ctx->pixels) {
-        ESP_LOGE(TAG, "no PSRAM for a %dx%d icon buffer (%u B)",
+        ESP_LOGE(TAG, "no RAM for a %dx%d icon buffer (%u B)",
                  size, size, (unsigned)px_bytes);
         free(ctx);
         return NULL;
@@ -195,7 +194,7 @@ void wx_icon_set(lv_obj_t *icon, const char *slug)
     char *old = ctx->json;
     ctx->json = json;
     lv_lottie_set_src_data(icon, json, len);
-    free(old);
+    if (old) free(old);
 
     strncpy(ctx->slug, slug, sizeof(ctx->slug) - 1);
     ctx->slug[sizeof(ctx->slug) - 1] = '\0';

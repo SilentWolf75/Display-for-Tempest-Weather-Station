@@ -40,3 +40,4 @@ const char *net_current_ssid(void);
 /* True once SNTP has set a plausible wall clock. Sunrise/sunset rendering and
  * staleness checks are meaningless before this. */
 bool net_time_is_valid(void);
+void net_set_timezone(int tz_idx);

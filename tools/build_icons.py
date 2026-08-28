@@ -39,7 +39,8 @@ CACHE = REPO / ".cache" / "meteocons.tgz"
 # Left column is what better_forecast returns; right is the file we ship.
 MAPPING = {
     "clear-day":                 "clear-day",
-    "clear-night":               "clear-night",
+    "clear-night":               "starry-night",
+    "starry-night":              "starry-night",
     "cloudy":                    "cloudy",
     "foggy":                     "fog",
     "partly-cloudy-day":         "partly-cloudy-day",
@@ -57,6 +58,14 @@ MAPPING = {
     "snow":                      "snow",
     "thunderstorm":              "thunderstorms",
     "windy":                     "wind",
+    "moon-full":                 "moon-full",
+    "moon-waxing-gibbous":       "moon-waxing-gibbous",
+    "moon-first-quarter":        "moon-first-quarter",
+    "moon-waning-gibbous":       "moon-waning-gibbous",
+    "moon-last-quarter":         "moon-last-quarter",
+    "moon-waxing-crescent":      "moon-waxing-crescent",
+    "moon-waning-crescent":      "moon-waning-crescent",
+    "moon-new":                  "moon-new",
 }
 
 # Rendered when the API hands us a slug we have never seen. Better a neutral

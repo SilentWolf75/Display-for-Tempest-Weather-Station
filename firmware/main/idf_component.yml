@@ -43,3 +43,13 @@ dependencies:
   ## IDF 5.5.3 + LVGL 9.2.2. Revisit only when moving both forward together.
   espressif/esp_lvgl_port:
     version: "~2.7.2"
+    ## Built from the local copy, not the registry one. That copy stops a
+    ## transient GT911 I2C error calling abort() -- see
+    ## components/esp_lvgl_port/README.md.
+    ##
+    ## override_path is the mechanism that actually works. Simply dropping a
+    ## directory into components/ does NOT override a managed component: the
+    ## managed one is named "espressif__esp_lvgl_port", so a local
+    ## "esp_lvgl_port" is a different component that nothing depends on, and it
+    ## is silently never compiled.
+    override_path: "../components/esp_lvgl_port"

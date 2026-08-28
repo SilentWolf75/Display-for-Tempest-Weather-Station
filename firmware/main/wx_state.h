@@ -133,6 +133,11 @@ typedef struct {
     bool     wifi_connected;
     int64_t  last_udp_epoch;            /* any datagram, for liveness */
     uint32_t udp_packets_total;
+    /* ---- Air Quality Index (AQI) from EPA / Open-Meteo ---- */
+    int      aqi_val;
+    char     aqi_category[24];
+    float    aqi_pm25;
+    bool     aqi_valid;
 } wx_state_t;
 
 /* Call once, before any producer or consumer task starts. */
@@ -151,6 +156,7 @@ void wx_update_hub_status(int rssi, uint32_t uptime_s);
 void wx_update_device_status(int rssi, float voltage, uint32_t sensor_status);
 void wx_update_forecast(const wx_state_t *partial);
 void wx_update_indoor(const wx_state_t *partial);
+void wx_update_aqi(int aqi_val, const char *cat, float pm25);
 void wx_set_wifi_connected(bool connected);
 void wx_note_udp_packet(void);
 

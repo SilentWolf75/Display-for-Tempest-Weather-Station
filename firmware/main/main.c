@@ -31,6 +31,14 @@
 #include "tempest_udp.h"
 #include "tempest_rest.h"
 #include "indoor.h"
+#include "audio.h"
+#include "nws_alerts.h"
+#include "aqi_poll.h"
+#include "web_server.h"
+#include "mqtt_client_app.h"
+#include <time.h>
+
+#include "sdcard.h"
 #include "ui/ui.h"
 #include "ui/wx_icons.h"
 
@@ -57,6 +65,22 @@ static void log_boot_banner(void)
     ESP_LOGI(TAG, "PSRAM free:    %u B",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     ESP_LOGI(TAG, "----------------------------------------");
+}
+
+static void ui_init_task(void *pvParameters)
+{
+    (void)pvParameters;
+    ESP_LOGI(TAG, "Acquiring display lock for UI initialization...");
+    if (display_lock(10000)) {
+        ESP_LOGI(TAG, "Display locked; building UI widgets...");
+        ui_init();
+        lv_timer_create(ui_timer_cb, UI_TICK_PERIOD_MS, NULL);
+        display_unlock();
+        ESP_LOGI(TAG, "UI initialized and display unlocked");
+    } else {
+        ESP_LOGE(TAG, "CRITICAL: Failed to lock display for UI initialization!");
+    }
+    vTaskDelete(NULL);
 }
 
 void app_main(void)
@@ -97,12 +121,11 @@ void app_main(void)
         /* Keep going headless -- the serial log is still useful for the
          * Milestone 2 UDP test, which does not need a working panel. */
     } else {
-        if (display_lock(-1)) {
-            ui_init();
-            lv_timer_create(ui_timer_cb, UI_TICK_PERIOD_MS, NULL);
-            display_unlock();
-        }
+        xTaskCreatePinnedToCore(ui_init_task, "ui_init", 65536, NULL, 5, NULL, 1);
     }
+
+    /* Start MicroSD Card Storage before network/SDIO on Slot 1 */
+    sdcard_start();
 
 #if CONFIG_TEMPEST_NETWORK_ENABLED
     /* --- network: not fatal --- */
@@ -140,6 +163,25 @@ void app_main(void)
      * a missing sensor just leaves the indoor gauge empty. */
     indoor_start();
 
+    /* Initialize NS4168 I2S Audio System */
+    audio_init();
+
+    /* Start NOAA NWS Weather Alerts Monitor */
+    nws_alerts_start();
+
+    /* Start EPA AirNow Air Quality Index Monitor */
+    aqi_poll_start();
+
+    /* Start Local Web Dashboard & mDNS (http://tempest.local) */
+    cfg_t cfg_boot;
+    cfg_get(&cfg_boot);
+    if (cfg_boot.web_server_enabled) {
+        web_server_start();
+    }
+    if (cfg_boot.mqtt_enabled) {
+        mqtt_app_start();
+    }
+
     /* --- health log, and the Milestone 2 evidence trail ---
      * If packet_count stays at 0 while Wi-Fi is connected, the C6 is not
      * forwarding broadcast frames. See docs/roadmap.md Milestone 2. */
@@ -160,6 +202,13 @@ void app_main(void)
                  net_is_connected() ? "up" : "down",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+
+        /* Weather history to the card. Rate-limits itself to one row a
+         * minute, so calling it on the 30 s health tick is fine. The old code
+         * never called this at all, which is why nothing was ever logged. */
+        wx_state_t snap;
+        wx_snapshot(&snap);
+        sdcard_log_weather(&snap, (int64_t)time(NULL));
 
         if (count == last_count && net_is_connected()) {
             ESP_LOGW(TAG, "no UDP traffic in 30s despite an active network.");

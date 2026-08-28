@@ -177,5 +177,4 @@ void diag_report_network(void)
 void diag_run_all(void)
 {
     diag_report_hardware();
-    diag_i2c_scan();
 }

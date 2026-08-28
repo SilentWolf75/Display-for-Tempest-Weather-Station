@@ -26,8 +26,8 @@ static const char *TAG = "display";
 
 #define BACKLIGHT_LEDC_TIMER    LEDC_TIMER_0
 #define BACKLIGHT_LEDC_CHANNEL  LEDC_CHANNEL_0
-#define BACKLIGHT_DUTY_RES      LEDC_TIMER_11_BIT
-#define BACKLIGHT_FREQ_HZ       BOARD_LCD_BACKLIGHT_FREQ_HZ
+#define BACKLIGHT_DUTY_RES      LEDC_TIMER_10_BIT
+#define BACKLIGHT_FREQ_HZ       10000
 
 static esp_ldo_channel_handle_t   s_mipi_phy_ldo;
 static esp_lcd_panel_handle_t     s_panel;
@@ -45,21 +45,25 @@ static esp_err_t init_backlight(void)
         return ESP_OK;
     }
 
+    gpio_set_direction(BOARD_LCD_BACKLIGHT_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(BOARD_LCD_BACKLIGHT_GPIO, 1);
+
     ledc_timer_config_t timer = {
         .speed_mode      = LEDC_LOW_SPEED_MODE,
         .timer_num       = BACKLIGHT_LEDC_TIMER,
         .duty_resolution = BACKLIGHT_DUTY_RES,
         .freq_hz         = BACKLIGHT_FREQ_HZ,
-        .clk_cfg         = LEDC_USE_PLL_DIV_CLK,
+        .clk_cfg         = LEDC_AUTO_CLK,
     };
     ESP_RETURN_ON_ERROR(ledc_timer_config(&timer), TAG, "ledc timer");
 
+    uint32_t max_duty = (1u << BACKLIGHT_DUTY_RES) - 1;
     ledc_channel_config_t ch = {
         .gpio_num   = BOARD_LCD_BACKLIGHT_GPIO,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel    = BACKLIGHT_LEDC_CHANNEL,
         .timer_sel  = BACKLIGHT_LEDC_TIMER,
-        .duty       = 0,
+        .duty       = max_duty,
         .hpoint     = 0,
     };
     ESP_RETURN_ON_ERROR(ledc_channel_config(&ch), TAG, "ledc channel");
@@ -174,6 +178,9 @@ static esp_err_t init_panel(void)
 
 static esp_err_t init_touch(void)
 {
+    /* Allow power rails & GT911 IC to settle after MIPI D-PHY boot */
+    vTaskDelay(pdMS_TO_TICKS(50));
+
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port          = BOARD_I2C_PORT,
         .sda_io_num        = BOARD_I2C_SDA_GPIO,
@@ -184,20 +191,37 @@ static esp_err_t init_touch(void)
     };
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_cfg, &s_i2c), TAG, "i2c bus");
 
+    /* Quick probe with 50ms timeout so touch never hangs display init */
+    uint16_t addr = 0;
+    if (i2c_master_probe(s_i2c, 0x14, 50) == ESP_OK) {
+        addr = 0x14;
+    } else if (i2c_master_probe(s_i2c, 0x5D, 50) == ESP_OK) {
+        addr = 0x5D;
+    }
+
+    if (addr == 0) {
+        ESP_LOGW(TAG, "GT911 touch not responding on I2C; continuing without touch");
+        s_touch = NULL;
+        return ESP_OK;
+    }
+
     esp_lcd_panel_io_handle_t tp_io = NULL;
     esp_lcd_panel_io_i2c_config_t tp_io_cfg = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+    tp_io_cfg.dev_addr     = addr;
     tp_io_cfg.scl_speed_hz = BOARD_I2C_FREQ_HZ;
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(s_i2c, &tp_io_cfg, &tp_io),
-                        TAG, "touch io");
+    if (esp_lcd_new_panel_io_i2c(s_i2c, &tp_io_cfg, &tp_io) != ESP_OK) {
+        s_touch = NULL;
+        return ESP_OK;
+    }
 
     esp_lcd_touch_config_t tp_cfg = {
         .x_max        = BOARD_LCD_H_RES,
         .y_max        = BOARD_LCD_V_RES,
-        .rst_gpio_num = BOARD_TOUCH_RST_GPIO,
-        .int_gpio_num = BOARD_TOUCH_INT_GPIO,
+        .rst_gpio_num = -1,
+        .int_gpio_num = -1,
         .levels = {
-            .reset     = BOARD_TOUCH_RST_LEVEL,
-            .interrupt = BOARD_TOUCH_INT_LEVEL,
+            .reset     = 0,
+            .interrupt = 0,
         },
         .flags = {
             .swap_xy  = 0,
@@ -208,26 +232,7 @@ static esp_err_t init_touch(void)
 
     esp_err_t err = esp_lcd_touch_new_i2c_gt911(tp_io, &tp_cfg, &s_touch);
     if (err != ESP_OK) {
-        /* The GT911 straps to 0x5D or 0x14 depending on the INT pin level at
-         * power-up, and which one it lands on is not reliably predictable.
-         * Elecrow's own BSP retries on the backup address for this reason. */
-        ESP_LOGW(TAG, "GT911 not at primary address (%s), trying backup",
-                 esp_err_to_name(err));
-        esp_lcd_panel_io_del(tp_io);
-        tp_io = NULL;
-
-        esp_lcd_panel_io_i2c_config_t alt = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
-        alt.dev_addr      = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP;
-        alt.scl_speed_hz  = BOARD_I2C_FREQ_HZ;
-        if (esp_lcd_new_panel_io_i2c(s_i2c, &alt, &tp_io) == ESP_OK) {
-            err = esp_lcd_touch_new_i2c_gt911(tp_io, &tp_cfg, &s_touch);
-        }
-    }
-    if (err != ESP_OK) {
-        /* A dead touch controller should not stop the weather from showing.
-         * Log it and carry on read-only. */
-        ESP_LOGW(TAG, "GT911 init failed (%s); continuing without touch",
-                 esp_err_to_name(err));
+        ESP_LOGW(TAG, "GT911 driver init returned %s; continuing", esp_err_to_name(err));
         s_touch = NULL;
     }
     return ESP_OK;
@@ -316,11 +321,8 @@ i2c_master_bus_handle_t display_get_i2c_bus(void)
 
 bool display_lock(int timeout_ms)
 {
-    /* esp_lvgl_port's convention is that ZERO blocks indefinitely, not that
-     * zero returns immediately. Passing a negative value straight through
-     * became 0xFFFFFFFF ms, which overflows pdMS_TO_TICKS and yields a
-     * nonsense timeout rather than the "wait forever" the caller asked for. */
-    return lvgl_port_lock(timeout_ms < 0 ? 0 : (uint32_t)timeout_ms);
+    uint32_t to = (timeout_ms <= 0) ? 10000 : (uint32_t)timeout_ms;
+    return lvgl_port_lock(to);
 }
 
 void display_unlock(void)

@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "main.c"
+        "sdcard.c"
         "wx_state.c"
         "tempest_udp.c"
         "tempest_rest.c"
@@ -9,6 +10,7 @@ idf_component_register(
         "display.c"
         "ui/ui.c"
         "ui/wx_icons.c"
+        "ui/weather_icons_data.c"
         "ui/settings.c"
         "ui/graphs.c"
         "ui/wifi_setup.c"
@@ -16,6 +18,11 @@ idf_component_register(
         "config.c"
         "diag.c"
         "ota.c"
+        "audio.c"
+        "nws_alerts.c"
+        "aqi_poll.c"
+        "web_server.c"
+        "mqtt_client_app.c"
     INCLUDE_DIRS
         "."
         "ui"
@@ -32,8 +39,11 @@ idf_component_register(
         driver
         esp_timer
         spiffs
+        fatfs
+        sdmmc
         esp_app_format
         app_update
         spi_flash
         esp_http_server
+        mqtt
 )

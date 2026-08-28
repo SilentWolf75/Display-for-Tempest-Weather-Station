@@ -154,31 +154,38 @@ static indoor_sensor_t probe(i2c_master_bus_handle_t bus)
 
 static void indoor_task(void *arg)
 {
-    (void)arg;
+    i2c_master_bus_handle_t bus = (i2c_master_bus_handle_t)arg;
 
     while (1) {
+        if (s_type == INDOOR_SENSOR_NONE) {
+            s_type = probe(bus);
+            if (s_type == INDOOR_SENSOR_NONE) {
+                vTaskDelay(pdMS_TO_TICKS(5000));
+                continue;
+            }
+            ESP_LOGI(TAG, "Indoor sensor detected: %s", indoor_sensor_name());
+        }
+
         float t = 0.0f, h = 0.0f;
         esp_err_t err = (s_type == INDOOR_SENSOR_AHT20)
                       ? aht20_read(&t, &h)
                       : sht4x_read(&t, &h);
 
         if (err == ESP_OK) {
-            /* Sanity gate. A sensor that has come loose reads garbage rather
-             * than failing cleanly, and a wall display showing -50 C indoors
-             * is worse than one showing nothing. */
+            /* Sanity gate */
             if (t > -20.0f && t < 70.0f && h >= 0.0f && h <= 100.0f) {
                 wx_state_t p = {0};
                 p.indoor_temp_c       = t;
                 p.indoor_humidity_pct = h;
-                /* Temperature and humidity only -- that is the whole
-                 * requirement, and the UI shows nothing it cannot measure. */
                 wx_update_indoor(&p);
             } else {
                 ESP_LOGW(TAG, "implausible reading %.1fC %.0f%%, ignoring",
                          (double)t, (double)h);
             }
         } else {
-            ESP_LOGW(TAG, "read failed: %s", esp_err_to_name(err));
+            ESP_LOGW(TAG, "read failed: %s; will re-probe", esp_err_to_name(err));
+            detach();
+            s_type = INDOOR_SENSOR_NONE;
         }
 
         vTaskDelay(pdMS_TO_TICKS(CONFIG_INDOOR_POLL_INTERVAL_S * 1000));
@@ -187,8 +194,7 @@ static void indoor_task(void *arg)
 
 esp_err_t indoor_start(void)
 {
-    /* Share the bus the touch controller already created, so there is one
-     * owner. The GT911 and this sensor sit on the same two pins. */
+    /* Share the bus the touch controller already created */
     i2c_master_bus_handle_t bus = display_get_i2c_bus();
     if (!bus) {
         ESP_LOGE(TAG, "no I2C bus; display_init() must run first");
@@ -196,15 +202,13 @@ esp_err_t indoor_start(void)
     }
 
     s_type = probe(bus);
-    if (s_type == INDOOR_SENSOR_NONE) {
-        ESP_LOGW(TAG, "no indoor sensor at 0x%02X or 0x%02X.",
-                 AHT20_ADDR, SHT4X_ADDR);
-        ESP_LOGW(TAG, "Plug an AHT20/DHT20 or SHT4x into the Grove header.");
-        ESP_LOGW(TAG, "The outdoor half of the display is unaffected.");
-        return ESP_ERR_NOT_FOUND;
+    if (s_type != INDOOR_SENSOR_NONE) {
+        ESP_LOGI(TAG, "Indoor sensor found at boot: %s", indoor_sensor_name());
+    } else {
+        ESP_LOGI(TAG, "No indoor sensor at boot; hot-plug auto-detection enabled");
     }
 
-    if (xTaskCreate(indoor_task, "indoor", TASK_STACK, NULL, TASK_PRIO, NULL)
+    if (xTaskCreate(indoor_task, "indoor", TASK_STACK, (void *)bus, TASK_PRIO, NULL)
             != pdPASS) {
         return ESP_ERR_NO_MEM;
     }

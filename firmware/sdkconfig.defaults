@@ -46,6 +46,7 @@ CONFIG_SPIRAM_SPEED_200M=y
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=262144
 
 # The 200 MHz PSRAM setting the Elecrow wiki calls for is gated behind this.
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
@@ -77,7 +78,7 @@ CONFIG_ESP_HOSTED_ENABLED=y
 CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
 CONFIG_ESP_HOSTED_SDIO_1_BIT_BUS=y
 CONFIG_ESP_HOSTED_SDIO_BUS_WIDTH=1
-CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=20000
 CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=19
 CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=18
 CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=17
@@ -123,9 +124,16 @@ CONFIG_LWIP_NETIF_LOOPBACK=y
 # SNTP — needed for sunrise/sunset and "last updated" staleness.
 CONFIG_LWIP_SNTP_MAX_SERVERS=2
 
-# --- TLS for the REST forecast poll ---
+# --- TLS for REST, NWS Alerts, and Cloud feeds ---
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_MBEDTLS_HARDWARE_AES=n
+CONFIG_MBEDTLS_HARDWARE_GCM=n
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_ESP_TLS_INSECURE=n
 
 # --- Main task needs room for LVGL setup ---
@@ -193,3 +201,22 @@ CONFIG_LV_USE_MATRIX=y
 # build time, so a too-long slug fails the build rather than the device.
 CONFIG_SPIFFS_OBJ_NAME_LEN=64
 CONFIG_SPIFFS_PAGE_CHECK=y
+
+# Reserve 128 KB internal SRAM for SDIO DMA buffers
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=131072
+
+# --- FATFS: exFAT on the microSD card ---
+#
+# exFAT needs long filenames (FF_USE_LFN >= 1); the default LFN_NONE makes
+# FF_FS_EXFAT do nothing at all. HEAP rather than STACK because the LFN working
+# buffer is ~512 bytes and the task stacks here are already carrying LVGL.
+#
+# The exFAT constant itself lives in components/fatfs -- a vendored copy of
+# ESP-IDF 5.5.3's component, because upstream hard-codes FF_FS_EXFAT to 0 with
+# no Kconfig and no #ifndef guard. See components/fatfs/README.md.
+CONFIG_FATFS_LFN_HEAP=y
+# exFAT's code uses FF_USE_LABEL in a C expression, not just in #if,
+# so leaving this unset makes ffconf.h expand to an undefined token.
+CONFIG_FATFS_USE_LABEL=y
+# CONFIG_FATFS_LFN_NONE is not set
+CONFIG_FATFS_MAX_LFN=255

@@ -410,3 +410,15 @@ const char *wx_compass_point(int degrees)
     int d = ((degrees % 360) + 360) % 360;
     return pts[(int)((d / 22.5f) + 0.5f) % 16];
 }
+
+void wx_update_aqi(int aqi_val, const char *cat, float pm25)
+{
+    LOCK();
+    s_state.aqi_val = aqi_val;
+    s_state.aqi_pm25 = pm25;
+    if (cat) {
+        strncpy(s_state.aqi_category, cat, sizeof(s_state.aqi_category) - 1);
+    }
+    s_state.aqi_valid = (aqi_val > 0);
+    UNLOCK();
+}

@@ -30,6 +30,7 @@ typedef struct {
     char        wifi_password[CFG_PASSWORD_LEN];
 
     cfg_units_t units;
+    uint8_t     timezone_idx;        /* 0=ET, 1=CT, 2=MT, 3=AZ, 4=PT, 5=AK, 6=HI, 7=UTC */
     uint8_t     brightness_day;      /* 5..100 */
     uint8_t     brightness_night;    /* 0..100, 0 = backlight off */
     uint8_t     night_start_hour;    /* local hour dimming begins */
@@ -37,6 +38,15 @@ typedef struct {
     bool        night_dim_enabled;
     bool        animate_forecast;    /* animate all 7 icons, not just header */
     uint8_t     wind_scale_max_ms;   /* full-scale on the wind ring */
+    char        alert_zipcode[10];   /* 5-digit US Zip Code for NOAA alerts */
+    uint8_t     alert_volume;        /* 0..100 % volume */
+    bool        alert_siren_enabled; /* Audible 1050 Hz siren on active warning */
+    bool        hourly_chime_enabled;/* Soft chime at top of the hour (8am-8pm) */
+    bool        morning_briefing_enabled; /* Spoken forecast brief at wakeup */
+    bool        night_alert_dnd;     /* Silence non-critical alerts at night */
+    bool        web_server_enabled;  /* Local Web Dashboard (http://tempest.local) */
+    bool        mqtt_enabled;        /* Home Assistant MQTT Auto-Discovery */
+    char        mqtt_broker[64];     /* MQTT broker host/IP */
 } cfg_t;
 
 esp_err_t cfg_init(void);

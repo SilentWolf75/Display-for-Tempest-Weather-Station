@@ -19,7 +19,9 @@ if not os.path.exists(OS):
 
 WANT = ["WALL", "BAY_DEPTH", "REAR_CLEARANCE", "PCB_Z", "SHELL_D", "BEZEL_T",
         "FRONT_GLASS", "INSERT_L", "BOARD_W", "BOARD_H", "FIT_GAP",
-        "BAT_X", "BAT_Y", "BAT_W", "BAT_H", "BOOT_SLOT_X", "SW_SLOT_X"]
+        "BAT_X", "BAT_Y", "BAT_W", "BAT_H", "BOOT_SLOT_X", "SW_SLOT_X",
+        "SENSOR_WIN_X", "SENSOR_WIN_Y", "SENSOR_SCREW_DX",
+        "SENSOR_POST_H", "SPK0_X"]
 NL = chr(10)
 open('_chk.scad', 'w').write(
     'PART="none";' + NL + 'include <tempest_stand.scad>' + NL
@@ -78,10 +80,30 @@ ok &= probe("shell screw hole breaks out of the back (z=0.1)",
     "intersection(){shell();translate([2.0,1.9,0.05])cube([2.2,2.2,0.1]);}", "EMPTY")
 ok &= probe("shell boss stops at the PCB plane (z=%.1f)" % (K["PCB_Z"] + 0.2),
     slab("shell", 0.5, 0.5, 9, K["PCB_Z"] + 0.2), "EMPTY")
-ok &= probe("battery fence stands on the plate (z=%.1f)" % (K["WALL"] + 4),
-    slab("shell", K["BAT_X"] - 2.0, K["BAT_Y"] + 20, 1.5, K["WALL"] + 4), "SOLID")
-ok &= probe("battery bay floor is clear (z=%.1f)" % (K["WALL"] + 4),
-    slab("shell", K["BAT_X"] + 20, K["BAT_Y"] + 20, 4, K["WALL"] + 4), "EMPTY")
+ok &= probe("sensor window is open through the plate",
+    slab("shell", K["SENSOR_WIN_X"] - 1, K["SENSOR_WIN_Y"] - 1, 2,
+         K["WALL"] / 2), "EMPTY")
+POST_MID = K["WALL"] + K["SENSOR_POST_H"] / 2
+ok &= probe("sensor post stands INSIDE at z=%.1f" % POST_MID,
+    slab("shell", K["SENSOR_WIN_X"] + K["SENSOR_SCREW_DX"] + 2.2,
+         K["SENSOR_WIN_Y"] - 0.6, 1.2, POST_MID), "SOLID")
+ok &= probe("post is drilled, not solid (pilot open at z=%.1f)" % POST_MID,
+    slab("shell", K["SENSOR_WIN_X"] + K["SENSOR_SCREW_DX"] - 0.8,
+         K["SENSOR_WIN_Y"] - 0.8, 1.6, POST_MID), "EMPTY")
+ok &= probe("pilot is BLIND -- plate under it is unbroken",
+    slab("shell", K["SENSOR_WIN_X"] + K["SENSOR_SCREW_DX"] - 0.8,
+         K["SENSOR_WIN_Y"] - 0.8, 1.6, K["WALL"] / 2), "SOLID")
+ok &= probe("nothing projects outside the back plate",
+    slab("shell", K["SENSOR_WIN_X"] + K["SENSOR_SCREW_DX"],
+         K["SENSOR_WIN_Y"], 3, -1.0), "EMPTY")
+ok &= probe("post stops at 5 mm (nothing above z=%.1f)"
+            % (K["WALL"] + K["SENSOR_POST_H"] + 0.3),
+    slab("shell", K["SENSOR_WIN_X"] + K["SENSOR_SCREW_DX"] - 3,
+         K["SENSOR_WIN_Y"] - 3, 6, K["WALL"] + K["SENSOR_POST_H"] + 0.3),
+    "EMPTY")
+ok &= probe("no fence left around the sensor",
+    slab("shell", K["SENSOR_WIN_X"] + 2, K["SENSOR_WIN_Y"] + 9, 2,
+         K["WALL"] + 2), "EMPTY")
 ok &= probe("BOOT/RESET slot is open through the back plate",
     slab("shell", K["BOOT_SLOT_X"] - 2, 23, 4, K["WALL"] / 2), "EMPTY")
 ok &= probe("power switch slot is open through the back plate",
@@ -89,7 +111,7 @@ ok &= probe("power switch slot is open through the back plate",
 ok &= probe("back plate is solid between the two slots",
     slab("shell", K["BOOT_SLOT_X"] - 2, 60, 4, K["WALL"] / 2), "SOLID")
 ok &= probe("speaker grille is open through the plate (z=%.1f)" % (K["WALL"] / 2),
-    slab("shell", 33.2, 121.2, 1.6, K["WALL"] / 2), "EMPTY")
+    slab("shell", K["SPK0_X"] - 0.8, 57.2, 1.6, K["WALL"] / 2), "EMPTY")
 
 # All four foot bolts per foot must be drilled, and drilled where the foot
 # actually presents its holes. FOOT_X is 0.28/0.72 of the board width; the

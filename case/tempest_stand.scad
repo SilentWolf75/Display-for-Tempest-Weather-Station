@@ -105,7 +105,13 @@ holes = [
 // occupy REAR_CLEARANCE above that.
 // ---------------------------------------------------------------------------
 
-BAY_DEPTH = 12;             // clear depth for the battery, floor to components
+BAY_DEPTH = 2;              // clear depth over the back plate
+
+// Was 12, for an internal LiPo. Dropped to 2 to take 10 mm off the depth of
+// the shell, which you measured as safe. That removes the battery bay -- a
+// flat pack no longer fits -- so the panel is USB-powered. Put this back to 12
+// and re-enable battery_bay() below if you ever want the battery.
+BATTERY_BAY = false;
 
 // Flat 3.7 V LiPo. Sized for a 10000 mAh pack, which also swallows a 5000.
 // Common 10000 mAh packs run about 130 x 65 x 10; 5000 mAh about 100 x 55 x 8.
@@ -114,15 +120,93 @@ BAT_FENCE = 8;              // rib height holding it in place
 BAT_X = (BOARD_W - BAT_W) / 2;
 BAT_Y = 66;                 // clear of the foot pads, which end at y = 63
 
-// Speakers. Elecrow ships two; they are NOT in the STEP model, so this is the
-// one dimension here still waiting on a caliper. Generous by default.
-SPK_W = 34; SPK_H = 24;     // <-- MEASURE the speaker body
-SPK_FENCE = 6;
-// Up the sides rather than along the bottom: the foot pads own the bottom
-// band, and the two back-plate access slots own the corners near them. These
-// two are mirror images of each other (34 and 247.04 - 34), so the back stays
-// symmetric.
-speakers = [[34, 122], [213, 122]];
+// microSD, on the BOTTOM edge near the BOOT/RESET corner. Board-data coords.
+// Estimated off the photos; my two readings came out 16.6 and 19.9 mm, so
+// CHECK THIS with a ruler before printing -- a slot a few mm out means the
+// card will not go in at all, unlike the grilles where it only costs volume.
+SD_X = 18;                  // <-- MEASURE from the board corner
+SD_W = 17;                  // 1.5 mm of MATERIAL added each side of the 20
+                            // that printed, so the opening gets smaller, not
+                            // larger. I read "add 1.5 mm to the left and right
+                            // side" as widening it and went to 23 -- wrong way.
+                            // Card is 11 mm and the socket mouth ~15, so 17
+                            // still clears both.
+SD_DROP = 3.5;              // how far below the PCB plane the opening reaches.
+                            // 7 was too deep, 3 a touch shallow.
+
+// Indoor sensor module (AHT20/DHT20 on a narrow breakout), mounted on the
+// inside of the back plate with its grille poking out through a 17 x 13
+// opening. SENSOR_X/Y place it; move them if it fouls anything.
+// The module screws down through its own M3 hole rather than sitting in a
+// fence, so all that is needed is a window and one screw boss.
+//
+// It mounts sensor-side DOWN: the PCB lies flat on the inside of the back
+// plate and the DHT20's grille pokes out through the window, which is the
+// whole point -- sealed inside, it would read the panel's waste heat.
+//
+// The module stands off the plate on a single 5 mm post rather than lying on
+// it, so the sensor body hangs in the window with its grille at the opening.
+// Nothing projects outside the case.
+SENSOR_WIN_L = 19;          // 17 plus the 1 mm each side you asked for
+SENSOR_WIN_W = 15;          // 13 plus 1 mm each side
+// 56, up from 54: you asked for the window closer to the screw post. The post
+// is a 7 mm cylinder centred at SENSOR_WIN_X + SENSOR_SCREW_DX, so its near
+// face sits at 66.25 and the window's edge now lands 0.75 mm short of it --
+// about as close as it can go without the opening biting into the post.
+SENSOR_WIN_X = 56.5;        // window centre -- where the grille comes through
+SENSOR_WIN_Y = 97;
+
+// Screw boss, offset from the window centre toward the pin-header end. The
+// module's hole sits about 2.75 mm clear of the sensor body, and the body is
+// roughly 15 mm long, so the hole lands ~10.5 mm from the body's centre.
+// If your module measures differently this is the one number to change.
+// Offset of the post from the window centre, toward the pin-header end.
+// 14.5 is where you circled it on the render. It disagrees with the other way
+// of arriving at the number -- a hole 2.75 mm clear of a ~15 mm body works out
+// at 10.5 -- so if the screw misses the module's hole, change this one value.
+// 15.75, up from 14.5: you asked for the post about 1.25 mm further "left"
+// in a photo that is upside down, so in this model's coordinates that is +x.
+//
+// If the sensor body ends up MORE off-centre in the window rather than less,
+// I read the flip backwards -- set this to 13.25 and it moves the other way by
+// the same amount. It is the only value involved.
+// 13.75, down from 15.75, purely to keep the POST where it is. The offset is
+// measured from the window, so moving the window from 54 to 56 would have
+// dragged the post 2 mm with it -- and the post is the one thing now confirmed
+// correct, since the module screws down on it. Post stays at x = 69.75.
+// 13.25: the window moved another 0.5 mm toward the post, so the offset drops
+// by the same amount to leave the post exactly where it is at x = 69.75. The
+// opening's edge now sits 0.25 mm off the post's face -- as close as it goes
+// before the cut starts eating the post's 2.05 mm wall.
+SENSOR_SCREW_DX = 13.25;
+SENSOR_POST_D   = 7;
+SENSOR_POST_H   = 5;        // INSIDE the case; the module sits on top of it
+SENSOR_PILOT    = 2.9;      // self-tapping M3
+SENSOR_PILOT_DP = 4.6;      // blind, so nothing breaks through the back
+
+// Speakers. Photographs of the assembled board settle what the STEP model
+// could not: the two speakers are stuck to the BACK OF THE PCB and wired to
+// the SPK-L / SPK-R sockets. They are not case-mounted at all, which is why
+// fences moulded into the back plate never lined up with them.
+//
+// So there are no fences any more -- just grilles in the back plate over
+// wherever the speakers actually sit, giving the sound somewhere to go.
+//
+// These positions are BOARD-DATA (back-view) coordinates and are the one
+// thing here I could not pin down: my estimates off the photos disagreed
+// between shots by more than 20 mm, which is worse than useless for a grille.
+// MEASURE the centre of each speaker from the board corners and put the real
+// numbers here. Being a few mm out only muffles the sound; the grille is
+// oversized to absorb that.
+SPK_W = 46; SPK_H = 36;     // <-- MEASURE the speaker body (oversized grille)
+// Five slots a side, and both grilles now sit clear of the foot pads so the
+// guard suppresses nothing -- the count is the same on both sides by design
+// rather than by accident.
+//
+// The left grille's five slots land at model x = 19..43, exactly where they
+// already print, so that side is unchanged. The right one is its mirror at
+// 204..228: clear of the pad, which ends at 198, and clear of the wall.
+speakers = [[25, 58], [216, 58]];   // <-- MEASURE, board-data coords
 
 
 // ---------------------------------------------------------------------------
@@ -141,6 +225,10 @@ PCB_Z   = WALL + BAY_DEPTH + REAR_CLEARANCE;   // where the PCB's back sits
 BOSS_D    = 10;         // spacer boss outside diameter; taller now, so wider
 SCREW_CLR = 3.4;        // M3 clearance -- the screw passes THROUGH the shell
 
+// M3 button head, ISO 7380: 5.7 mm across the head, 1.65 mm tall.
+SCREW_HEAD_D    = 6.2;  // 5.7 plus clearance
+SCREW_HEAD_SEAT = 2.0;  // bore depth; head finishes 0.35 mm below the surface
+
 // M3 x 6 x 4.2 brass heat-set insert, threaded into the BEZEL.
 // The screw enters from the back of the shell, passes through the board's own
 // corner hole, and threads into brass rather than into printed plastic.
@@ -148,6 +236,12 @@ INSERT_D  = 4.2;        // outside diameter of the insert
 INSERT_L  = 6.0;        // length
 INSERT_FIT = -0.1;      // hole is slightly UNDER size; the brass melts its
                         // own seat. Go to 0 if your printer runs tight.
+
+// Clearance past the end of the insert for the screw tip. Without it the only
+// button-head length that fits is M3 x 20, which engages barely 2.5 mm of
+// brass. With it, M3 x 25 fits and takes the full 6 mm of the insert -- and
+// 25 is a size the assortment kit actually contains.
+INSERT_CLEAR = 2.2;
 
 TILT = 18;              // degrees off vertical
 
@@ -242,13 +336,16 @@ bottom_cuts = [
 // slot that is a few mm oversize costs nothing, and a hole in the wrong place
 // cannot be undone. Tighten them once you can measure the real board.
 back_access = [
-    [   7.0,  25.0, 13, 34],    // K3 + K4, one slot covering both buttons
+    [   7.0,  25.0, 11, 30],    // K3 + K4, one slot covering both buttons.
+                                // 13 x 34 printed a touch generous; both
+                                // buttons still clear at 11 x 30.
     [ 240.5, 100.9, 13, 15],    // SW1 power slide switch, room to slide it
 ];
 
 // Where those slots actually land in this file's coordinates, after the
 // mirror. Exported so the geometry self-test can aim at them.
 BOOT_SLOT_X = mx(7.0);
+SPK0_X      = mx(speakers[1][0]);
 SW_SLOT_X   = mx(240.5);
 
 // Left edge, positioned by Y
@@ -266,12 +363,20 @@ module rounded_box(w, h, d, r) {
 module vent_grid() {
     // Slots rather than holes: they bridge cleanly when printed and move more
     // air per unit of lost stiffness. Kept clear of the screw bosses.
-    for (x = [60 : 22 : BOARD_W - 60])
+    // A deliberate block in the middle rather than a grid spanning the whole
+    // plate. The plate has four things carved out of it now -- two foot pads,
+    // two speaker grilles and the sensor mount -- and a full-width grid just
+    // lost columns to all of them and came out lopsided. This range is the
+    // strip that is clear of every one of them, so nothing gets clipped.
+    for (x = [100 : 22 : 150])
         for (y = [28 : 18 : BOARD_H - 28])
             // Skip anything a foot pad would sit on top of and plug anyway.
             if (!(min([for (fx = FOOT_X) abs(x - fx)]) < 24
                   && y < FOOT_BOLT_U[1] + 14)
-                && !in_bay(x, y))
+                && !in_bay(x, y)
+                && !(x > SENSOR_WIN_X - 14
+                     && x < SENSOR_WIN_X + SENSOR_SCREW_DX + 10
+                     && abs(y - SENSOR_WIN_Y) < 16))
             translate([x, y, -1])
                 hull() {
                     translate([0, -5, 0]) cylinder(d=4, h=WALL+2, $fn=24);
@@ -279,34 +384,58 @@ module vent_grid() {
                 }
 }
 
+/* Rounded rectangular openings through a wall.
+ *
+ * Square-cornered cuts print with a sharp internal corner that chips and
+ * catches on a cable; a small radius costs nothing and looks deliberate.
+ * Where an opening runs past the top of a wall the upper corners fall outside
+ * the material, so only the bottom two are ever visible.
+ *
+ * _x is extruded along x for the side walls, _y along y for top and bottom.
+ */
+module slot_through_x(x0, y_c, z0, w, h, t, r) {
+    translate([x0, y_c, z0 + h / 2])
+        rotate([0, 90, 0])
+            hull()
+                for (a = [-(h/2 - r), h/2 - r], b = [-(w/2 - r), w/2 - r])
+                    translate([a, b, 0]) cylinder(r=r, h=t, $fn=24);
+}
+
+module slot_through_y(x_c, y0, z0, w, h, t, r) {
+    translate([x_c, y0, z0 + h / 2])
+        rotate([-90, 0, 0])
+            hull()
+                for (a = [-(w/2 - r), w/2 - r], b = [-(h/2 - r), h/2 - r])
+                    translate([a, b, 0]) cylinder(r=r, h=t, $fn=24);
+}
+
 module edge_cutouts() {
     // Openings start just under the PCB rather than at the back plate -- the
     // shell is now deep enough that cutting the full height would leave a
     // slot most of the way down the side for no reason.
-    z0 = PCB_Z - 3;
+    z0 = PCB_Z - 6;             // was -3; the plug body wanted more room under
+                                // the connector than that left it
     depth = SHELL_D + 2;
 
     // The board data's own x = BOARD_W edge. Mirrored, it lands on this
     // model's LOW-x wall, which is why the ternary is here and not a typo.
     hi = !BOARD_DATA_IS_BACK_VIEW;
     for (c = ALL_PORTS ? right_cuts : usb_cuts)
-        translate([hi ? BOARD_W + FIT_GAP - 1 : -FIT_GAP - WALL - 2,
-                   c[0] - c[1]/2, z0])
-            cube([WALL + 3, c[1], depth]);
+        slot_through_x(hi ? BOARD_W + FIT_GAP - 1 : -FIT_GAP - WALL - 2,
+                       c[0], z0, c[1], depth, WALL + 3, 2);
 
     // The board data's x = 0 edge, on the opposite wall.
     for (c = ALL_PORTS ? left_cuts : [])
-        translate([hi ? -FIT_GAP - WALL - 2 : BOARD_W + FIT_GAP - 1,
-                   c[0] - c[1]/2, z0])
-            cube([WALL + 3, c[1], depth]);
+        slot_through_x(hi ? -FIT_GAP - WALL - 2 : BOARD_W + FIT_GAP - 1,
+                       c[0], z0, c[1], depth, WALL + 3, 2);
 
     // Top and bottom walls keep their edge; only x is mirrored.
     for (c = ALL_PORTS ? top_cuts : [])
-        translate([mx(c[0]) - c[1]/2, BOARD_H + FIT_GAP - 1, z0])
-            cube([c[1], WALL + 3, depth]);
+        slot_through_y(mx(c[0]), BOARD_H + FIT_GAP - 1, z0,
+                       c[1], depth, WALL + 3, 2);
     for (c = ALL_PORTS ? bottom_cuts : [])
-        translate([mx(c[0]) - c[1]/2, -FIT_GAP - WALL - 2, z0])
-            cube([c[1], WALL + 3, depth]);
+        slot_through_y(mx(c[0]), -FIT_GAP - WALL - 2, z0,
+                       c[1], depth, WALL + 3, 2);
 }
 
 // Slots through the back plate for BOOT, RESET and the power switch.
@@ -336,29 +465,72 @@ module fence(x, y, w, h, tall, gap_at_x) {
 
 module battery_bay()  { fence(BAT_X, BAT_Y, BAT_W, BAT_H, BAT_FENCE, BAT_X + 8); }
 
-module speaker_bays() {
-    for (c = speakers)
-        fence(c[0] - SPK_W/2, c[1] - SPK_H/2, SPK_W, SPK_H, SPK_FENCE,
-              c[0] - SPK_W/2 + 4);
+// Mount for the AHT20/DHT20 module on the back of the case, with an opening
+// the sensor's grille pokes through so it reads room air rather than the
+// warm air inside a sealed box next to the panel.
+//
+// The module is a narrow strip with the sensor at one end and a 4-pin header
+// at the other. The fence locates the strip; the opening is at the sensor end.
+module sensor_mount() {
+    // A single post inside the case for one M3. No fence, nothing outside.
+    translate([SENSOR_WIN_X + SENSOR_SCREW_DX, SENSOR_WIN_Y, WALL])
+        cylinder(d=SENSOR_POST_D, h=SENSOR_POST_H, $fn=40);
 }
 
-// Slots under each speaker so it is not firing into a sealed box.
+module sensor_window() {
+    // Window the grille sits in.
+    translate([SENSOR_WIN_X, SENSOR_WIN_Y, -1])
+        hull()
+            for (dx = [-(SENSOR_WIN_L/2 - 2), SENSOR_WIN_L/2 - 2],
+                 dy = [-(SENSOR_WIN_W/2 - 2), SENSOR_WIN_W/2 - 2])
+                translate([dx, dy, 0])
+                    cylinder(r=2, h=WALL + 2, $fn=24);
+
+    // Blind pilot down the post, stopping short of the plate so the screw
+    // cannot break through and show on the back.
+    translate([SENSOR_WIN_X + SENSOR_SCREW_DX, SENSOR_WIN_Y,
+               WALL + SENSOR_POST_H - SENSOR_PILOT_DP])
+        cylinder(d=SENSOR_PILOT, h=SENSOR_PILOT_DP + 0.1, $fn=32);
+}
+
+/* No speaker fences: the speakers are on the PCB, not on the case. */
+
+// Slots in the back plate over each PCB-mounted speaker, so it is not firing
+// into a sealed box. Mirrored like every other board-derived position.
+function on_foot_pad(x, y) =
+    min([for (fx = FOOT_X) abs(x - fx)]) < 21
+    && y > FOOT_BOLT_U[0] - 12 && y < FOOT_BOLT_U[1] + 12;
+
 module speaker_grilles() {
     for (c = speakers)
-        for (i = [-2 : 1 : 2])
-            translate([c[0] + i * 5, c[1], -1])
+        for (i = [-2 : 1 : 2])   // five a side; see the comment on speakers
+            // Never perforate a foot pad: those four screws pull against it.
+            // With the speaker positions still estimated this actually bites --
+            // the right-hand grille lands squarely on the right pad.
+            if (!on_foot_pad(mx(c[0]) + i * 6, c[1]))
+            translate([mx(c[0]) + i * 6, c[1], -1])
                 hull() {
-                    translate([0, -SPK_H/2 + 5, 0]) cylinder(d=3, h=WALL+2, $fn=20);
-                    translate([0,  SPK_H/2 - 5, 0]) cylinder(d=3, h=WALL+2, $fn=20);
+                    translate([0, -SPK_H/2 + 6, 0]) cylinder(d=3.4, h=WALL+2, $fn=20);
+                    translate([0,  SPK_H/2 - 6, 0]) cylinder(d=3.4, h=WALL+2, $fn=20);
                 }
+}
+
+// microSD slot in the BOTTOM wall. The socket sits on the back of the PCB and
+// the card goes in edge-on, so this cut sits just under the PCB plane rather
+// than running the full height of the wall like the USB-C openings do.
+module sd_slot() {
+    slot_through_y(mx(SD_X), -FIT_GAP - WALL - 2, PCB_Z - SD_DROP,
+                   SD_W, SD_DROP + 1, WALL + 3, 1.5);
 }
 
 // True where a bay sits, so the vent grid can stay out of the way.
 function in_bay(x, y) =
-    (x > BAT_X - 6 && x < BAT_X + BAT_W + 6 &&
+    (BATTERY_BAY &&
+     x > BAT_X - 6 && x < BAT_X + BAT_W + 6 &&
      y > BAT_Y - 6 && y < BAT_Y + BAT_H + 6)
     || max([for (c = speakers)
-            (abs(x - c[0]) < SPK_W/2 + 8 && abs(y - c[1]) < SPK_H/2 + 8) ? 1 : 0]) > 0;
+            (abs(x - mx(c[0])) < SPK_W/2 + 8
+             && abs(y - c[1]) < SPK_H/2 + 8) ? 1 : 0]) > 0;
 
 module shell() {
     difference() {
@@ -381,10 +553,10 @@ module shell() {
                 translate([h[0], h[1], WALL])
                     cylinder(d=BOSS_D, h=BAY_DEPTH + REAR_CLEARANCE, $fn=48);
 
-            // Retention for the battery and the two speakers, standing on
-            // the inside of the back plate.
-            battery_bay();
-            speaker_bays();
+            // Retention for the speakers, standing on the inside of the
+            // back plate. The battery fence is off -- see BATTERY_BAY.
+            if (BATTERY_BAY) battery_bay();
+            sensor_mount();
 
             // Pads inside the back plate that the foot screws pull against.
             // Long enough to carry BOTH bolt rows, not just the lower one.
@@ -398,13 +570,22 @@ module shell() {
             translate([h[0], h[1], -1])
                 cylinder(d=SCREW_CLR, h=SHELL_D + 4, $fn=32);
 
-        // Countersink on the OUTSIDE so the head finishes flush with the back.
+        // Counterbore on the OUTSIDE for a BUTTON head (ISO 7380), which has a
+        // domed top and a FLAT underside. A conical countersink would leave the
+        // dome perched on the rim instead of seating, so this is a
+        // flat-bottomed pocket, not a cone.
+        //
+        // Only WALL - SCREW_HEAD_SEAT of plate is left under the bore, but the
+        // 10 mm boss sits directly above it, so the head bears on solid
+        // material rather than on a thin membrane.
         for (h = holes)
             translate([h[0], h[1], -0.01])
-                cylinder(d1=6.6, d2=SCREW_CLR, h=1.6, $fn=32);
+                cylinder(d=SCREW_HEAD_D, h=SCREW_HEAD_SEAT, $fn=40);
 
         speaker_grilles();
         back_access_slots();
+        sensor_window();
+        sd_slot();
 
         // Foot screws: four per foot, matching foot()'s four holes. These are
         // CLEARANCE -- the screw drops in from inside the shell, through the
@@ -466,8 +647,10 @@ module bezel() {
         // pocket stops BEZEL_T + FRONT_GLASS - INSERT_L above the front face,
         // so nothing breaks through and the front stays unmarked.
         for (h = holes)
-            translate([h[0], h[1], BEZEL_T + FRONT_GLASS - INSERT_L])
-                cylinder(d=INSERT_D + INSERT_FIT, h=INSERT_L + 0.2, $fn=32);
+            translate([h[0], h[1],
+                       BEZEL_T + FRONT_GLASS - INSERT_L - INSERT_CLEAR])
+                cylinder(d=INSERT_D + INSERT_FIT,
+                         h=INSERT_L + INSERT_CLEAR + 0.2, $fn=32);
     }
 }
 
@@ -556,13 +739,15 @@ PART = "preview";
 // measurement the numbers change with it -- read them off the console rather
 // than trusting the README.
 PCB_ONLY   = BOARD_THICK - FRONT_GLASS;             // PCB without the glass
-SCREW_MIN  = PCB_Z + PCB_ONLY;                      // just reaches the insert
-SCREW_MAX  = SCREW_MIN + INSERT_L + 0.2;            // bottoms out in the bezel
-echo(str("M3 screw: at least ", SCREW_MIN, " mm to reach the insert, ",
-         "at most ", SCREW_MAX, " mm before it bottoms out. Use ",
-         SCREW_MIN + 4, "-", SCREW_MIN + 6, " mm."));
+// Button-head length is measured UNDER the head, so the usable span starts at
+// the bottom of the counterbore rather than at the face of the shell.
+SCREW_MIN  = PCB_Z + PCB_ONLY - SCREW_HEAD_SEAT;    // just reaches the insert
+SCREW_MAX  = SCREW_MIN + INSERT_L + INSERT_CLEAR + 0.2;   // bottoms out
+echo(str("M3 BUTTON head (length under the head): at least ", SCREW_MIN,
+         " mm to reach the insert, at most ", SCREW_MAX,
+         " mm before it bottoms out."));
 echo(str("Bezel front skin over each insert: ",
-         BEZEL_T + FRONT_GLASS - INSERT_L, " mm"));
+         BEZEL_T + FRONT_GLASS - INSERT_L - INSERT_CLEAR, " mm"));
 
 if (PART == "shell") shell();
 else if (PART == "foot") foot();
