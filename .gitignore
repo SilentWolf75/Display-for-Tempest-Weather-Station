@@ -21,6 +21,9 @@ __pycache__/
 *.pyc
 .venv/
 
+# Local logs
+overnight.log
+
 # Icon build cache (3 MB tarball, re-downloadable)
 .cache/
 

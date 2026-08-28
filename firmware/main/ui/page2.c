@@ -317,6 +317,7 @@ esp_err_t page2_init(void)
     lv_obj_set_pos(title, 16, 12);
 
     ui_create_page_button(s_screen, LV_ALIGN_TOP_RIGHT, -14, 8, UI_PAGE_INSIGHTS);
+    ui_attach_swipe_nav(s_screen);
 
     build_moon_panel();
     build_mid_row();

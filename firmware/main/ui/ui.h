@@ -27,7 +27,11 @@ esp_err_t ui_init(void);
 
 /* Cycle dashboard -> insights -> graphs -> dashboard. */
 void ui_page_next(void);
+void ui_page_prev(void);
 void ui_page_goto(ui_page_t page);
+
+/* Horizontal swipe left/right to change pages. */
+void ui_attach_swipe_nav(lv_obj_t *screen);
 
 /* Standard header page button; returns the label inside. */
 lv_obj_t *ui_create_page_button(lv_obj_t *parent, lv_align_t align, int x_ofs, int y_ofs,

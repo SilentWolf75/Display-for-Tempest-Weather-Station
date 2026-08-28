@@ -170,16 +170,32 @@ static fc_col_t fc[FC_COLS];
 
 static void on_gear(lv_event_t *e);
 static void on_page_btn(lv_event_t *e);
+static void on_toggle_units(lv_event_t *e);
+static void on_screen_swipe(lv_event_t *e);
 static void ui_sync_page_button_labels(void);
+
+static lv_point_t s_swipe_start;
+static bool       s_swipe_active;
+static bool       s_swipe_handled;
 
 /* ======================================================================== */
 /* ---- HELPER BUILDERS --------------------------------------------------- */
 /* ======================================================================== */
 
-static void on_open_graphs(lv_event_t *e)
+static void on_toggle_units(lv_event_t *e)
 {
     (void)e;
-    ui_page_goto(UI_PAGE_GRAPHS);
+    if (s_swipe_handled) {
+        s_swipe_handled = false;
+        return;
+    }
+
+    cfg_t c;
+    cfg_get(&c);
+    c.units = (c.units == CFG_UNITS_IMPERIAL) ? CFG_UNITS_METRIC : CFG_UNITS_IMPERIAL;
+    cfg_set(&c);
+    ESP_LOGI(TAG, "units toggled to %s",
+             c.units == CFG_UNITS_METRIC ? "metric" : "imperial");
 }
 
 static const char *page_button_label(ui_page_t page)
@@ -224,6 +240,55 @@ void ui_page_goto(ui_page_t page)
 void ui_page_next(void)
 {
     ui_page_goto((ui_page_t)((s_current_page + 1) % UI_PAGE_COUNT));
+}
+
+void ui_page_prev(void)
+{
+    ui_page_goto((ui_page_t)((s_current_page + UI_PAGE_COUNT - 1) % UI_PAGE_COUNT));
+}
+
+void ui_attach_swipe_nav(lv_obj_t *screen)
+{
+    lv_obj_add_event_cb(screen, on_screen_swipe, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(screen, on_screen_swipe, LV_EVENT_RELEASED, NULL);
+}
+
+static void on_screen_swipe(lv_event_t *e)
+{
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) {
+        return;
+    }
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    if (lv_event_get_code(e) == LV_EVENT_PRESSED) {
+        s_swipe_start = p;
+        s_swipe_active = true;
+        s_swipe_handled = false;
+        return;
+    }
+
+    if (!s_swipe_active || lv_event_get_code(e) != LV_EVENT_RELEASED) {
+        return;
+    }
+    s_swipe_active = false;
+
+    int dx = p.x - s_swipe_start.x;
+    int dy = p.y - s_swipe_start.y;
+    int adx = dx < 0 ? -dx : dx;
+    int ady = dy < 0 ? -dy : dy;
+    if (adx < 100 || adx < ady * 2) {
+        return;
+    }
+
+    s_swipe_handled = true;
+    if (dx < 0) {
+        ui_page_next();
+    } else {
+        ui_page_prev();
+    }
 }
 
 lv_obj_t *ui_create_page_button(lv_obj_t *parent, lv_align_t align, int x_ofs, int y_ofs,
@@ -508,7 +573,7 @@ static void build_top_deck(lv_obj_t *scr)
     /* --- ZONE 1: OUTDOOR TEMPERATURE --- */
     lv_obj_t *z1 = make_card(scr, PAD, TOP_Y, Z1_W, TOP_H, COL_CARD_BORDER, COL_TEMP_HOT);
     lv_obj_add_flag(z1, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(z1, on_open_graphs, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(z1, on_toggle_units, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *t1 = label(z1, &lv_font_montserrat_14, COL_TEMP_HOT, "OUTDOOR TEMP");
     lv_obj_align(t1, LV_ALIGN_TOP_LEFT, 6, 2);
@@ -549,7 +614,7 @@ static void build_top_deck(lv_obj_t *scr)
     /* --- ZONE 2: SPLIT WIND COMPASS & SPEED --- */
     lv_obj_t *z2 = make_card(scr, PAD + Z1_W + 6, TOP_Y, Z2_W, TOP_H, COL_CARD_BORDER, COL_WIND_NEON);
     lv_obj_add_flag(z2, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(z2, on_open_graphs, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(z2, on_toggle_units, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *t2 = label(z2, &lv_font_montserrat_14, COL_WIND_NEON, "WIND & GUST");
     lv_obj_align(t2, LV_ALIGN_TOP_LEFT, 6, 2);
@@ -680,7 +745,7 @@ static void build_mid_deck(lv_obj_t *scr)
     /* --- MID 1: PRECIPITATION & RAIN CYLINDER --- */
     lv_obj_t *m1 = make_card(scr, PAD, MID_Y, M1_W, MID_H, COL_CARD_BORDER, COL_RAIN_NEON);
     lv_obj_add_flag(m1, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(m1, on_open_graphs, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(m1, on_toggle_units, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *t1 = label(m1, &lv_font_montserrat_14, COL_RAIN_NEON, "PRECIPITATION");
     lv_obj_align(t1, LV_ALIGN_TOP_LEFT, 8, 6);
@@ -813,7 +878,7 @@ static void build_mid_deck(lv_obj_t *scr)
     /* --- MID 4: BAROMETRIC PRESSURE & 12H TREND CHART --- */
     lv_obj_t *m4 = make_card(scr, PAD + M1_W + M2_W + M3_W + 18, MID_Y, M4_W, MID_H, COL_CARD_BORDER, COL_PRESS_NEON);
     lv_obj_add_flag(m4, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(m4, on_open_graphs, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(m4, on_toggle_units, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *t4 = label(m4, &lv_font_montserrat_14, COL_PRESS_NEON, "BAROMETER");
     lv_obj_align(t4, LV_ALIGN_TOP_LEFT, 8, 6);
@@ -958,6 +1023,8 @@ esp_err_t ui_init(void)
     graphs_init();
     page2_init();
     wifi_setup_init();
+
+    ui_attach_swipe_nav(s_main_screen);
 
     ESP_LOGI(TAG, "commercial weather console built (%dx%d)", SCR_W, SCR_H);
     return ESP_OK;

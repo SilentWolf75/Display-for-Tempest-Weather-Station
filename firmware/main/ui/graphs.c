@@ -151,6 +151,7 @@ esp_err_t graphs_init(void)
     lv_obj_set_pos(s_span_label, 230, 26);
 
     ui_create_page_button(s_screen, LV_ALIGN_TOP_RIGHT, -14, 8, UI_PAGE_GRAPHS);
+    ui_attach_swipe_nav(s_screen);
 
     build_panel(s_screen, 0, 0, HIST_TEMP,     "TEMPERATURE", COL_TEMP,  false);
     build_panel(s_screen, 1, 0, HIST_PRESSURE, "PRESSURE",    COL_PRESS, false);
