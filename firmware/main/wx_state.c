@@ -1,5 +1,6 @@
 #include "wx_state.h"
 #include "history.h"
+#include "wx_astronomy.h"
 
 #include <math.h>
 #include <string.h>
@@ -58,6 +59,8 @@ static int  s_strike_head;
 static int  s_strike_count;
 
 static int  s_current_yday = -1;
+static int  s_current_mon  = -1;
+static int  s_current_year = -1;
 
 /* Local midnight, not UTC: "rain today" has to mean the user's today. */
 static void roll_day_if_needed(int64_t epoch)
@@ -73,13 +76,28 @@ static void roll_day_if_needed(int64_t epoch)
         return;
     }
     if (s_current_yday != -1) {
+        float finished = s_state.rain_today_mm;
         ESP_LOGI(TAG, "local midnight: resetting daily accumulators");
+        s_state.rain_7d_mm    += finished;
+        s_state.rain_month_mm += finished;
+        s_state.rain_ytd_mm   += finished;
     }
     s_current_yday            = lt.tm_yday;
     s_state.rain_today_mm     = 0.0f;
     s_state.temp_high_today_c = 0.0f;
     s_state.temp_low_today_c  = 0.0f;
     s_state.daily_valid       = false;
+
+    if (s_current_mon != lt.tm_mon || s_current_year != lt.tm_year) {
+        if (s_current_mon != -1 && s_current_mon != lt.tm_mon) {
+            s_state.rain_month_mm = 0.0f;
+        }
+        if (s_current_year != -1 && s_current_year != lt.tm_year) {
+            s_state.rain_ytd_mm = 0.0f;
+        }
+        s_current_mon  = lt.tm_mon;
+        s_current_year = lt.tm_year;
+    }
 }
 
 static void push_pressure(int64_t epoch, float mb)
@@ -164,6 +182,31 @@ void wx_update_obs_st(const wx_state_t *p)
     s_state.dew_point_c  = wx_dew_point_c(p->air_temp_c, p->humidity_pct);
     s_state.feels_like_c = wx_feels_like_c(p->air_temp_c, p->humidity_pct,
                                            p->wind_avg_ms);
+    s_state.heat_index_c = wx_feels_like_c(p->air_temp_c, p->humidity_pct, 0.0f);
+    s_state.wind_chill_c = wx_feels_like_c(p->air_temp_c, 50.0f, p->wind_avg_ms);
+
+    if (p->air_temp_c >= 27.0f) {
+        s_state.comfort_mode = WX_COMFORT_HEAT_INDEX;
+        strncpy(s_state.comfort_risk,
+                wx_heat_index_risk(p->air_temp_c, p->humidity_pct),
+                sizeof(s_state.comfort_risk) - 1);
+    } else if (p->air_temp_c <= 10.0f && p->wind_avg_ms >= 1.34f) {
+        s_state.comfort_mode = WX_COMFORT_WIND_CHILL;
+        strncpy(s_state.comfort_risk,
+                wx_wind_chill_risk(p->air_temp_c, p->wind_avg_ms),
+                sizeof(s_state.comfort_risk) - 1);
+    } else {
+        s_state.comfort_mode = WX_COMFORT_FEELS;
+        strncpy(s_state.comfort_risk, "Comfortable",
+                sizeof(s_state.comfort_risk) - 1);
+    }
+
+    wx_moon_info_t moon;
+    wx_moon_compute(p->obs_epoch, &moon);
+    s_state.moon_illumination = moon.illumination;
+    strncpy(s_state.moon_phase_name, moon.phase_name,
+            sizeof(s_state.moon_phase_name) - 1);
+    strncpy(s_state.moon_icon, moon.icon_slug, sizeof(s_state.moon_icon) - 1);
 
     roll_day_if_needed(p->obs_epoch);
 
@@ -286,6 +329,49 @@ void wx_update_forecast(const wx_state_t *p)
     UNLOCK();
 }
 
+void wx_update_hourly(const wx_hourly_slot_t *slots, int count)
+{
+    if (!slots || count <= 0) {
+        return;
+    }
+    if (count > WX_HOURLY_SLOTS) {
+        count = WX_HOURLY_SLOTS;
+    }
+    LOCK();
+    memcpy(s_state.hourly, slots, (size_t)count * sizeof(wx_hourly_slot_t));
+    s_state.hourly_count          = count;
+    s_state.hourly_fetched_epoch  = (int64_t)time(NULL);
+    s_state.hourly_valid          = true;
+    UNLOCK();
+}
+
+void wx_update_rain_totals(float mm_7d, float mm_month, float mm_ytd)
+{
+    LOCK();
+    if (mm_7d > 0.0f) {
+        s_state.rain_7d_mm = mm_7d;
+    }
+    if (mm_month > 0.0f) {
+        s_state.rain_month_mm = mm_month;
+    }
+    if (mm_ytd > 0.0f) {
+        s_state.rain_ytd_mm = mm_ytd;
+    }
+    UNLOCK();
+}
+
+void wx_update_moon_schedule(int64_t rise, int64_t set)
+{
+    LOCK();
+    if (rise > 0) {
+        s_state.moonrise_epoch = rise;
+    }
+    if (set > 0) {
+        s_state.moonset_epoch = set;
+    }
+    UNLOCK();
+}
+
 void wx_update_indoor(const wx_state_t *p)
 {
     LOCK();
@@ -387,6 +473,44 @@ const char *wx_uv_description(float uv)
     if (uv < 8.0f)  return "High";
     if (uv < 11.0f) return "Very High";
     return "Extreme";
+}
+
+const char *wx_aqi_epa_label(int aqi)
+{
+    if (aqi <= 50)   return "Good";
+    if (aqi <= 100)  return "Moderate";
+    if (aqi <= 150)  return "USG";
+    if (aqi <= 200)  return "Unhealthy";
+    if (aqi <= 300)  return "Very Unhealthy";
+    return "Hazardous";
+}
+
+const char *wx_aqi_color_name(int aqi)
+{
+    if (aqi <= 50)   return "green";
+    if (aqi <= 100)  return "yellow";
+    if (aqi <= 150)  return "orange";
+    if (aqi <= 200)  return "red";
+    return "purple";
+}
+
+const char *wx_heat_index_risk(float temp_c, float humidity_pct)
+{
+    float hi_f = wx_c_to_f(wx_feels_like_c(temp_c, humidity_pct, 0.0f));
+    if (hi_f >= 130.0f) return "Extreme Danger";
+    if (hi_f >= 115.0f) return "Danger";
+    if (hi_f >= 105.0f) return "Extreme Caution";
+    if (hi_f >=  90.0f) return "Caution";
+    return "OK";
+}
+
+const char *wx_wind_chill_risk(float temp_c, float wind_ms)
+{
+    float wc_f = wx_c_to_f(wx_feels_like_c(temp_c, 50.0f, wind_ms));
+    if (wc_f <= -18.0f) return "Extreme Danger";
+    if (wc_f <= -28.0f) return "Danger";
+    if (wc_f <= -10.0f) return "Caution";
+    return "Cold";
 }
 
 const char *wx_trend_description(wx_trend_t trend)

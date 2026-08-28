@@ -56,6 +56,8 @@ static lv_obj_t *w_alert_siren_sw;
 static lv_obj_t *w_hourly_chime_sw;
 static lv_obj_t *w_morning_brief_sw;
 static lv_obj_t *w_night_dnd_sw;
+static lv_obj_t *w_night_standby_sw;
+static lv_obj_t *w_night_standby_red_sw;
 static lv_obj_t *w_web_server_sw;
 static lv_obj_t *w_mqtt_sw;
 
@@ -306,6 +308,22 @@ static void on_night_dnd_toggle(lv_event_t *e)
     cfg_set(&c);
 }
 
+static void on_night_standby_toggle(lv_event_t *e)
+{
+    cfg_t c;
+    cfg_get(&c);
+    c.night_standby_enabled = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    cfg_set(&c);
+}
+
+static void on_night_standby_red_toggle(lv_event_t *e)
+{
+    cfg_t c;
+    cfg_get(&c);
+    c.night_standby_red = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    cfg_set(&c);
+}
+
 static void on_web_server_toggle(lv_event_t *e)
 {
     cfg_t c;
@@ -548,6 +566,22 @@ esp_err_t settings_init(void)
     lv_slider_set_value(w_night_end, c.night_end_hour, LV_ANIM_OFF);
     lv_obj_add_event_cb(w_night_end, on_night_end, LV_EVENT_VALUE_CHANGED, NULL);
     y += ROW_H + 8;
+
+    row_label(left, y, "Night Standby Clock");
+    w_night_standby_sw = lv_switch_create(left);
+    lv_obj_set_size(w_night_standby_sw, 64, 34);
+    lv_obj_align(w_night_standby_sw, LV_ALIGN_TOP_RIGHT, 0, y + 4);
+    if (c.night_standby_enabled) lv_obj_add_state(w_night_standby_sw, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(w_night_standby_sw, on_night_standby_toggle, LV_EVENT_VALUE_CHANGED, NULL);
+    y += ROW_H + 4;
+
+    row_label(left, y, "Standby Red Tint (else Amber)");
+    w_night_standby_red_sw = lv_switch_create(left);
+    lv_obj_set_size(w_night_standby_red_sw, 64, 34);
+    lv_obj_align(w_night_standby_red_sw, LV_ALIGN_TOP_RIGHT, 0, y + 4);
+    if (c.night_standby_red) lv_obj_add_state(w_night_standby_red_sw, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(w_night_standby_red_sw, on_night_standby_red_toggle, LV_EVENT_VALUE_CHANGED, NULL);
+    y += ROW_H + 4;
 
     /* Reset & Reboot Buttons */
     lv_obj_t *reset = lv_button_create(left);

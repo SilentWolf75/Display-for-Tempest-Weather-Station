@@ -2,6 +2,7 @@
 #include "history.h"
 #include "config.h"
 #include "wx_state.h"
+#include "ui.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -56,12 +57,6 @@ static float    *s_scratch;         /* POINTS floats, PSRAM */
 static int64_t   s_last_redraw;
 
 /* ------------------------------------------------------------------------ */
-
-static void on_back(lv_event_t *e)
-{
-    (void)e;
-    graphs_hide();
-}
 
 static panel_t *build_panel(lv_obj_t *parent, int col, int row,
                             hist_series_t series, const char *title,
@@ -155,16 +150,7 @@ esp_err_t graphs_init(void)
     lv_label_set_text(s_span_label, "");
     lv_obj_set_pos(s_span_label, 230, 26);
 
-    lv_obj_t *back = lv_button_create(s_screen);
-    lv_obj_set_size(back, 140, 46);
-    lv_obj_set_pos(back, 1024 - 140 - 20, 12);
-    lv_obj_set_style_bg_color(back, COL_CARD, 0);
-    lv_obj_set_style_radius(back, 10, 0);
-    lv_obj_add_event_cb(back, on_back, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *bl = lv_label_create(back);
-    lv_label_set_text(bl, LV_SYMBOL_LEFT "  Back");
-    lv_obj_set_style_text_font(bl, &lv_font_montserrat_16, 0);
-    lv_obj_center(bl);
+    ui_create_page_button(s_screen, LV_ALIGN_TOP_RIGHT, -14, 8, UI_PAGE_GRAPHS);
 
     build_panel(s_screen, 0, 0, HIST_TEMP,     "TEMPERATURE", COL_TEMP,  false);
     build_panel(s_screen, 1, 0, HIST_PRESSURE, "PRESSURE",    COL_PRESS, false);

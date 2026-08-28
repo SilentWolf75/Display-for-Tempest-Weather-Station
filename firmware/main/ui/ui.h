@@ -13,9 +13,25 @@
  */
 
 #include "esp_err.h"
+#include "lvgl.h"
+
+typedef enum {
+    UI_PAGE_DASHBOARD = 0,
+    UI_PAGE_INSIGHTS,
+    UI_PAGE_GRAPHS,
+    UI_PAGE_COUNT,
+} ui_page_t;
 
 /* Builds the screen. Call with the LVGL lock held. */
 esp_err_t ui_init(void);
+
+/* Cycle dashboard -> insights -> graphs -> dashboard. */
+void ui_page_next(void);
+void ui_page_goto(ui_page_t page);
+
+/* Standard header page button; returns the label inside. */
+lv_obj_t *ui_create_page_button(lv_obj_t *parent, lv_align_t align, int x_ofs, int y_ofs,
+                                ui_page_t page);
 
 /* Repaints from the current wx_state snapshot. Call with the LVGL lock held,
  * roughly once a second -- rapid_wind only lands every 3 s, so faster gains

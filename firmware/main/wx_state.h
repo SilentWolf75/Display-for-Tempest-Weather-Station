@@ -16,7 +16,20 @@
 #include "esp_err.h"
 
 #define WX_FORECAST_DAYS   7
+#define WX_HOURLY_SLOTS    24
 #define WX_COND_STR_LEN    32
+
+typedef enum {
+    WX_COMFORT_FEELS = 0,
+    WX_COMFORT_HEAT_INDEX,
+    WX_COMFORT_WIND_CHILL,
+} wx_comfort_mode_t;
+
+typedef struct {
+    int64_t hour_epoch;
+    float   temp_c;
+    int     precip_probability;
+} wx_hourly_slot_t;
 
 /* Barometric tendency over 3 hours, by the conventional mb thresholds. */
 typedef enum {
@@ -89,11 +102,18 @@ typedef struct {
      * only. Anything cumulative or historical has to be accumulated here. */
     float    dew_point_c;
     float    feels_like_c;
+    float    heat_index_c;
+    float    wind_chill_c;
+    wx_comfort_mode_t comfort_mode;
+    char     comfort_risk[24];
 
     /* Rain since local midnight, accumulated from the per-minute field.
      * rain_last_min_mm alone is useless on a display: it reads 0.00 through
      * most of a steady drizzle. */
     float    rain_today_mm;
+    float    rain_7d_mm;
+    float    rain_month_mm;
+    float    rain_ytd_mm;
     float    rain_rate_mm_hr;
 
     /* Observed extremes since local midnight -- what actually happened, as
@@ -124,10 +144,20 @@ typedef struct {
     char     current_icon[WX_COND_STR_LEN];
     int64_t  sunrise_epoch;
     int64_t  sunset_epoch;
+    int64_t  moonrise_epoch;
+    int64_t  moonset_epoch;
+    float    moon_illumination;
+    char     moon_phase_name[32];
+    char     moon_icon[WX_COND_STR_LEN];
     wx_forecast_day_t forecast[WX_FORECAST_DAYS];
     int      forecast_days;
     int64_t  forecast_fetched_epoch;
     bool     forecast_valid;
+
+    wx_hourly_slot_t hourly[WX_HOURLY_SLOTS];
+    int      hourly_count;
+    int64_t  hourly_fetched_epoch;
+    bool     hourly_valid;
 
     /* ---- link health ---- */
     bool     wifi_connected;
@@ -155,6 +185,9 @@ void wx_update_precip_start(int64_t epoch);
 void wx_update_hub_status(int rssi, uint32_t uptime_s);
 void wx_update_device_status(int rssi, float voltage, uint32_t sensor_status);
 void wx_update_forecast(const wx_state_t *partial);
+void wx_update_hourly(const wx_hourly_slot_t *slots, int count);
+void wx_update_rain_totals(float mm_7d, float mm_month, float mm_ytd);
+void wx_update_moon_schedule(int64_t rise, int64_t set);
 void wx_update_indoor(const wx_state_t *partial);
 void wx_update_aqi(int aqi_val, const char *cat, float pm25);
 void wx_set_wifi_connected(bool connected);
@@ -174,6 +207,12 @@ const char *wx_compass_point(int degrees);
 
 /* "Low" / "Moderate" / "High" / "Very High" / "Extreme", per the WHO scale. */
 const char *wx_uv_description(float uv_index);
+
+const char *wx_aqi_color_name(int aqi);
+const char *wx_aqi_epa_label(int aqi);
+
+const char *wx_heat_index_risk(float temp_c, float humidity_pct);
+const char *wx_wind_chill_risk(float temp_c, float wind_ms);
 
 /* "rising rapidly", "steady", ... for the pressure card. */
 const char *wx_trend_description(wx_trend_t trend);

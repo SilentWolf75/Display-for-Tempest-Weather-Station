@@ -213,6 +213,9 @@ static time_t parse_iso_time(const char *str)
     return 0;
 }
 
+static esp_err_t geocode_zip(const char *zipcode, float *out_lat, float *out_lon);
+static esp_err_t fetch_open_meteo_extras(const char *zipcode, float lat, float lon);
+
 static esp_err_t fetch_open_meteo_forecast(const char *zipcode)
 {
     if (!zipcode || strlen(zipcode) < 5) return ESP_FAIL;
@@ -369,6 +372,199 @@ static esp_err_t fetch_open_meteo_forecast(const char *zipcode)
     wx_update_forecast(&p);
     ESP_LOGI(TAG, "Open-Meteo forecast updated: %d days (Today: %.1fC / %.1fC, %s)",
              p.forecast_days, p.forecast[0].air_temp_high_c, p.forecast[0].air_temp_low_c, p.current_conditions);
+    fetch_open_meteo_extras(zipcode, lat, lon);
+    return ESP_OK;
+}
+
+static esp_err_t geocode_zip(const char *zipcode, float *out_lat, float *out_lon)
+{
+    if (!zipcode || strlen(zipcode) < 5 || !out_lat || !out_lon) {
+        return ESP_FAIL;
+    }
+
+    char zip_url[128];
+    snprintf(zip_url, sizeof(zip_url), "http://api.zippopotam.us/us/%s", zipcode);
+
+    char *resp_buf = malloc(4096);
+    if (!resp_buf) {
+        return ESP_ERR_NO_MEM;
+    }
+    resp_buf[0] = '\0';
+
+    resp_accum_t acc = { .buf = resp_buf, .len = 0, .cap = 4096 };
+    esp_http_client_config_t http_cfg = {
+        .url = zip_url,
+        .event_handler = http_event,
+        .user_data = &acc,
+        .timeout_ms = 8000,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+    if (!client) {
+        free(resp_buf);
+        return ESP_FAIL;
+    }
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    *out_lat = 0.0f;
+    *out_lon = 0.0f;
+    if (err == ESP_OK && status == 200 && acc.len > 0) {
+        cJSON *root = cJSON_Parse(resp_buf);
+        if (root) {
+            cJSON *places = cJSON_GetObjectItemCaseSensitive(root, "places");
+            if (cJSON_IsArray(places) && cJSON_GetArraySize(places) > 0) {
+                cJSON *p0 = cJSON_GetArrayItem(places, 0);
+                cJSON *lat_obj = cJSON_GetObjectItemCaseSensitive(p0, "latitude");
+                cJSON *lon_obj = cJSON_GetObjectItemCaseSensitive(p0, "longitude");
+                if (lat_obj && lon_obj) {
+                    *out_lat = (float)atof(lat_obj->valuestring);
+                    *out_lon = (float)atof(lon_obj->valuestring);
+                }
+            }
+            cJSON_Delete(root);
+        }
+    }
+    free(resp_buf);
+    return (*out_lat != 0.0f || *out_lon != 0.0f) ? ESP_OK : ESP_FAIL;
+}
+
+static esp_err_t fetch_open_meteo_extras(const char *zipcode, float lat, float lon)
+{
+    if (lat == 0.0f && lon == 0.0f) {
+        if (geocode_zip(zipcode, &lat, &lon) != ESP_OK) {
+            return ESP_FAIL;
+        }
+    }
+
+    char *url = malloc(512);
+    char *resp_buf = heap_caps_malloc(96 * 1024, MALLOC_CAP_SPIRAM);
+    if (!url || !resp_buf) {
+        free(url);
+        free(resp_buf);
+        return ESP_ERR_NO_MEM;
+    }
+
+    snprintf(url, 512,
+             "http://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
+             "&timezone=auto&forecast_hours=24"
+             "&hourly=temperature_2m,precipitation_probability"
+             "&daily=precipitation_sum,moonrise,moonset"
+             "&past_days=31&forecast_days=1",
+             lat, lon);
+
+    resp_accum_t acc = { .buf = resp_buf, .len = 0, .cap = 96 * 1024 };
+    resp_buf[0] = '\0';
+
+    esp_http_client_config_t fc_cfg = {
+        .url = url,
+        .event_handler = http_event,
+        .user_data = &acc,
+        .timeout_ms = 15000,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&fc_cfg);
+    if (!client) {
+        free(url);
+        free(resp_buf);
+        return ESP_FAIL;
+    }
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    free(url);
+
+    if (err != ESP_OK || status != 200 || acc.len == 0) {
+        free(resp_buf);
+        return ESP_FAIL;
+    }
+
+    cJSON *root = cJSON_ParseWithLength(resp_buf, acc.len);
+    free(resp_buf);
+    if (!root) {
+        return ESP_FAIL;
+    }
+
+    /* Hourly timeline */
+    cJSON *hourly = cJSON_GetObjectItemCaseSensitive(root, "hourly");
+    if (cJSON_IsObject(hourly)) {
+        cJSON *times = cJSON_GetObjectItemCaseSensitive(hourly, "time");
+        cJSON *temps = cJSON_GetObjectItemCaseSensitive(hourly, "temperature_2m");
+        cJSON *pops  = cJSON_GetObjectItemCaseSensitive(hourly, "precipitation_probability");
+        if (cJSON_IsArray(times) && cJSON_IsArray(temps)) {
+            wx_hourly_slot_t slots[WX_HOURLY_SLOTS];
+            int n = cJSON_GetArraySize(times);
+            if (n > WX_HOURLY_SLOTS) {
+                n = WX_HOURLY_SLOTS;
+            }
+            int64_t now = (int64_t)time(NULL);
+            int wrote = 0;
+            for (int i = 0; i < n; i++) {
+                cJSON *t_item = cJSON_GetArrayItem(times, i);
+                if (!t_item || !cJSON_IsString(t_item)) {
+                    continue;
+                }
+                int64_t ts = (int64_t)parse_iso_time(t_item->valuestring);
+                if (ts < now - 3600) {
+                    continue;
+                }
+                slots[wrote].hour_epoch = ts;
+                cJSON *temp_item = cJSON_GetArrayItem(temps, i);
+                slots[wrote].temp_c = (temp_item && cJSON_IsNumber(temp_item))
+                                    ? (float)temp_item->valuedouble : 0.0f;
+                cJSON *pop_item = pops ? cJSON_GetArrayItem(pops, i) : NULL;
+                slots[wrote].precip_probability = (pop_item && cJSON_IsNumber(pop_item))
+                                                  ? pop_item->valueint : 0;
+                wrote++;
+                if (wrote >= WX_HOURLY_SLOTS) {
+                    break;
+                }
+            }
+            if (wrote > 0) {
+                wx_update_hourly(slots, wrote);
+            }
+        }
+    }
+
+    /* Rain totals + moon schedule from daily block */
+    cJSON *daily = cJSON_GetObjectItemCaseSensitive(root, "daily");
+    if (cJSON_IsObject(daily)) {
+        cJSON *precip = cJSON_GetObjectItemCaseSensitive(daily, "precipitation_sum");
+        cJSON *mr_arr = cJSON_GetObjectItemCaseSensitive(daily, "moonrise");
+        cJSON *ms_arr = cJSON_GetObjectItemCaseSensitive(daily, "moonset");
+
+        if (cJSON_IsArray(precip)) {
+            int days = cJSON_GetArraySize(precip);
+            float sum7 = 0.0f;
+            float sum_month = 0.0f;
+            int start7 = days > 7 ? days - 7 : 0;
+            for (int i = start7; i < days; i++) {
+                cJSON *v = cJSON_GetArrayItem(precip, i);
+                if (cJSON_IsNumber(v)) {
+                    sum7 += (float)v->valuedouble;
+                }
+            }
+            for (int i = 0; i < days; i++) {
+                cJSON *v = cJSON_GetArrayItem(precip, i);
+                if (cJSON_IsNumber(v)) {
+                    sum_month += (float)v->valuedouble;
+                }
+            }
+            wx_update_rain_totals(sum7, sum_month, sum_month);
+        }
+
+        if (cJSON_IsArray(mr_arr) && cJSON_GetArraySize(mr_arr) > 0) {
+            cJSON *mr = cJSON_GetArrayItem(mr_arr, cJSON_GetArraySize(mr_arr) - 1);
+            cJSON *ms = ms_arr ? cJSON_GetArrayItem(ms_arr, cJSON_GetArraySize(ms_arr) - 1) : NULL;
+            int64_t rise = (mr && cJSON_IsString(mr)) ? (int64_t)parse_iso_time(mr->valuestring) : 0;
+            int64_t set  = (ms && cJSON_IsString(ms)) ? (int64_t)parse_iso_time(ms->valuestring) : 0;
+            wx_update_moon_schedule(rise, set);
+        }
+    }
+
+    cJSON_Delete(root);
+    ESP_LOGI(TAG, "Open-Meteo extras updated (hourly + rain + moon schedule)");
     return ESP_OK;
 }
 
@@ -419,6 +615,10 @@ esp_err_t tempest_rest_fetch_now(void)
 
     free(url);
     free(acc.buf);
+
+    if (err == ESP_OK) {
+        fetch_open_meteo_extras(c.alert_zipcode, 0.0f, 0.0f);
+    }
     return err;
 }
 

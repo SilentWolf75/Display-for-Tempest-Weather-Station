@@ -44,6 +44,8 @@ typedef struct {
     bool        hourly_chime_enabled;/* Soft chime at top of the hour (8am-8pm) */
     bool        morning_briefing_enabled; /* Spoken forecast brief at wakeup */
     bool        night_alert_dnd;     /* Silence non-critical alerts at night */
+    bool        night_standby_enabled; /* Minimal clock during sleep hours */
+    bool        night_standby_red;   /* false = amber, true = red night tint */
     bool        web_server_enabled;  /* Local Web Dashboard (http://tempest.local) */
     bool        mqtt_enabled;        /* Home Assistant MQTT Auto-Discovery */
     char        mqtt_broker[64];     /* MQTT broker host/IP */

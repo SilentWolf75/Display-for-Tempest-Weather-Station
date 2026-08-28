@@ -13,6 +13,7 @@ idf_component_register(
         "ui/weather_icons_data.c"
         "ui/settings.c"
         "ui/graphs.c"
+        "ui/page2.c"
         "ui/wifi_setup.c"
         "history.c"
         "config.c"
@@ -23,6 +24,7 @@ idf_component_register(
         "aqi_poll.c"
         "web_server.c"
         "mqtt_client_app.c"
+        "wx_astronomy.c"
     INCLUDE_DIRS
         "."
         "ui"

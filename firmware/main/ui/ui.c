@@ -5,6 +5,7 @@
 #include "config.h"
 #include "settings.h"
 #include "graphs.h"
+#include "page2.h"
 #include "wifi_setup.h"
 #include "display.h"
 #include "net.h"
@@ -110,6 +111,9 @@ static const char *TAG = "ui";
 
 /* Header */
 static lv_obj_t *hdr_dot, *hdr_station, *hdr_health, *hdr_date, *hdr_clock, *hdr_bat_icon;
+static lv_obj_t *s_main_screen;
+static ui_page_t s_current_page = UI_PAGE_DASHBOARD;
+static lv_obj_t *hdr_page_lbl;
 
 /* Zone 1: Outdoor Temperature */
 static lv_obj_t *temp_val, *temp_feels_pill, *temp_dew_pill, *temp_hilo_lbl;
@@ -165,7 +169,8 @@ typedef struct {
 static fc_col_t fc[FC_COLS];
 
 static void on_gear(lv_event_t *e);
-static void on_graphs(lv_event_t *e);
+static void on_page_btn(lv_event_t *e);
+static void ui_sync_page_button_labels(void);
 
 /* ======================================================================== */
 /* ---- HELPER BUILDERS --------------------------------------------------- */
@@ -174,7 +179,89 @@ static void on_graphs(lv_event_t *e);
 static void on_open_graphs(lv_event_t *e)
 {
     (void)e;
-    graphs_show();
+    ui_page_goto(UI_PAGE_GRAPHS);
+}
+
+static const char *page_button_label(ui_page_t page)
+{
+    static const char *labels[UI_PAGE_COUNT] = {
+        "1/3",
+        "2/3",
+        "3/3",
+    };
+    if (page >= UI_PAGE_COUNT) {
+        return labels[0];
+    }
+    return labels[page];
+}
+
+void ui_page_goto(ui_page_t page)
+{
+    if (page >= UI_PAGE_COUNT) {
+        return;
+    }
+
+    switch (page) {
+    case UI_PAGE_DASHBOARD:
+        if (s_main_screen) {
+            lv_screen_load(s_main_screen);
+        }
+        break;
+    case UI_PAGE_INSIGHTS:
+        page2_show();
+        break;
+    case UI_PAGE_GRAPHS:
+        graphs_show();
+        break;
+    default:
+        break;
+    }
+
+    s_current_page = page;
+    ui_sync_page_button_labels();
+}
+
+void ui_page_next(void)
+{
+    ui_page_goto((ui_page_t)((s_current_page + 1) % UI_PAGE_COUNT));
+}
+
+lv_obj_t *ui_create_page_button(lv_obj_t *parent, lv_align_t align, int x_ofs, int y_ofs,
+                                ui_page_t page)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_set_height(btn, 30);
+    lv_obj_set_style_min_width(btn, 52, 0);
+    lv_obj_set_style_pad_hor(btn, 10, 0);
+    lv_obj_set_style_pad_ver(btn, 0, 0);
+    lv_obj_align(btn, align, x_ofs, y_ofs);
+    lv_obj_set_style_bg_color(btn, COL_TRACK, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(btn, COL_CARD_BORDER, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_radius(btn, 6, 0);
+    lv_obj_set_ext_click_area(btn, 10);
+    lv_obj_add_event_cb(btn, on_page_btn, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, page_button_label(page));
+    lv_obj_set_style_text_color(lbl, COL_TEXT, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_center(lbl);
+    lv_obj_update_layout(btn);
+    lv_obj_set_width(btn, lv_obj_get_width(lbl) + 20);
+
+    if (page == UI_PAGE_DASHBOARD) {
+        hdr_page_lbl = lbl;
+    }
+    return lbl;
+}
+
+static void ui_sync_page_button_labels(void)
+{
+    if (hdr_page_lbl) {
+        lv_label_set_text(hdr_page_lbl, page_button_label(s_current_page));
+    }
 }
 
 static lv_obj_t *make_card(lv_obj_t *parent, int x, int y, int w, int h, lv_color_t border_col, lv_color_t glow_col)
@@ -389,29 +476,13 @@ static void build_header(lv_obj_t *scr)
 
     /* Center: Date */
     hdr_date = label(h, &lv_font_montserrat_16, COL_DIM, "");
-    lv_obj_align(hdr_date, LV_ALIGN_CENTER, 40, 0);
+    lv_obj_align(hdr_date, LV_ALIGN_CENTER, 0, 0);
 
-    /* Right: Digital Clock & Top Action Buttons */
+    /* Right: Clock, page nav, settings */
     hdr_clock = label(h, &lv_font_montserrat_20, COL_TEXT, "--:--");
-    lv_obj_align(hdr_clock, LV_ALIGN_RIGHT_MID, -122, 0);
+    lv_obj_align(hdr_clock, LV_ALIGN_RIGHT_MID, -148, 0);
 
-    /* Trend Charts Button (Header Bar) */
-    lv_obj_t *chart_btn = lv_button_create(h);
-    lv_obj_set_size(chart_btn, 48, 30);
-    lv_obj_align(chart_btn, LV_ALIGN_RIGHT_MID, -60, 0);
-    lv_obj_set_style_bg_color(chart_btn, COL_TRACK, 0);
-    lv_obj_set_style_bg_opa(chart_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(chart_btn, COL_CARD_BORDER, 0);
-    lv_obj_set_style_border_width(chart_btn, 1, 0);
-    lv_obj_set_style_radius(chart_btn, 6, 0);
-    lv_obj_set_style_pad_all(chart_btn, 0, 0);
-    lv_obj_set_ext_click_area(chart_btn, 10);
-    lv_obj_add_event_cb(chart_btn, on_graphs, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *cl = lv_label_create(chart_btn);
-    lv_label_set_text(cl, LV_SYMBOL_IMAGE);
-    lv_obj_set_style_text_color(cl, COL_TEXT, 0);
-    lv_obj_set_style_text_font(cl, &lv_font_montserrat_18, 0);
-    lv_obj_center(cl);
+    ui_create_page_button(h, LV_ALIGN_RIGHT_MID, -60, 0, UI_PAGE_DASHBOARD);
 
     /* Settings Gear Button (Header Bar) */
     lv_obj_t *gear = lv_button_create(h);
@@ -846,10 +917,10 @@ static void on_gear(lv_event_t *e)
     settings_show();
 }
 
-static void on_graphs(lv_event_t *e)
+static void on_page_btn(lv_event_t *e)
 {
     (void)e;
-    graphs_show();
+    ui_page_next();
 }
 
 static void apply_brightness(int64_t now)
@@ -874,7 +945,8 @@ static void apply_brightness(int64_t now)
 
 esp_err_t ui_init(void)
 {
-    lv_obj_t *scr = lv_screen_active();
+    s_main_screen = lv_screen_active();
+    lv_obj_t *scr = s_main_screen;
     lv_obj_set_style_bg_color(scr, COL_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(scr, 0, 0);
@@ -887,6 +959,7 @@ esp_err_t ui_init(void)
 
     settings_init();
     graphs_init();
+    page2_init();
     wifi_setup_init();
 
     ESP_LOGI(TAG, "commercial weather console built (%dx%d)", SCR_W, SCR_H);
@@ -960,7 +1033,24 @@ static void update_top_deck(const wx_state_t *s, int64_t now)
 
     float feels = U_TEMP(s->feels_like_c);
     float dew = U_TEMP(s->dew_point_c);
-    set_text(temp_feels_pill, "Feels %.0f°", (double)feels);
+
+    if (s->comfort_mode == WX_COMFORT_HEAT_INDEX) {
+        float hi = U_TEMP(s->heat_index_c);
+        set_text(temp_feels_pill, "Heat Idx %.0f°", (double)hi);
+        lv_obj_set_style_text_color(temp_feels_pill,
+            strcmp(s->comfort_risk, "Danger") == 0 ||
+            strcmp(s->comfort_risk, "Extreme Danger") == 0 ? COL_ALERT :
+            strcmp(s->comfort_risk, "Caution") == 0 ? COL_TEMP_AMBER : COL_OK, 0);
+    } else if (s->comfort_mode == WX_COMFORT_WIND_CHILL) {
+        float wc = U_TEMP(s->wind_chill_c);
+        set_text(temp_feels_pill, "Wind Chill %.0f°", (double)wc);
+        lv_obj_set_style_text_color(temp_feels_pill,
+            strcmp(s->comfort_risk, "Extreme Danger") == 0 ? COL_ALERT :
+            COL_TEMP_COLD, 0);
+    } else {
+        set_text(temp_feels_pill, "Feels %.0f°", (double)feels);
+        lv_obj_set_style_text_color(temp_feels_pill, COL_DIM, 0);
+    }
     set_text(temp_dew_pill, "Dew %.0f°", (double)dew);
 
     float t_lo = s->daily_valid ? U_TEMP(s->temp_low_today_c) : t_cur;
@@ -1376,6 +1466,10 @@ void ui_tick(void)
     }
     if (graphs_is_visible()) {
         graphs_tick();
+        return;
+    }
+    if (page2_is_visible()) {
+        page2_tick();
         return;
     }
     if (wifi_setup_is_visible()) {
