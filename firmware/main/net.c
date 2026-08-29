@@ -16,6 +16,10 @@ esp_err_t net_start(void)
     return ESP_ERR_NOT_SUPPORTED;
 }
 
+esp_err_t net_init(void) { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t net_wifi_begin(void) { return ESP_ERR_NOT_SUPPORTED; }
+void net_schedule_wifi_begin(void) {}
+
 bool net_is_connected(void) { return false; }
 int8_t net_get_rssi(void) { return 0; }
 bool net_time_is_valid(void) { return false; }
@@ -24,6 +28,8 @@ esp_err_t net_apply_credentials(const char *s, const char *p)
 { (void)s; (void)p; return ESP_ERR_NOT_SUPPORTED; }
 const char *net_current_ssid(void) { return ""; }
 bool net_get_ip(char *buf, size_t len) { (void)buf; (void)len; return false; }
+bool net_wifi_scan_busy(void) { return false; }
+void net_wifi_ui_active(bool active) { (void)active; }
 
 #else
 
@@ -65,6 +71,7 @@ static const char *TAG = "net";
 #define CONNECT_TIMEOUT_MS   30000
 
 static EventGroupHandle_t s_events;
+static SemaphoreHandle_t  s_wifi_lock;
 static int  s_retries;
 static bool s_time_valid;
 static esp_timer_handle_t s_reconnect_timer;
@@ -72,10 +79,16 @@ static esp_timer_handle_t s_reconnect_timer;
  * the duration: esp_wifi_connect() and a scan cannot run at once, and the
  * scan is the one that loses -- it returns zero networks. */
 static volatile bool s_scanning;
+static volatile bool s_wifi_ui_active;
+static bool          s_wifi_begun;
+static esp_timer_handle_t s_wifi_begin_timer;
 
 static void reconnect_timer_cb(void *arg)
 {
     (void)arg;
+    if (s_wifi_ui_active) {
+        return;
+    }
     s_retries = 0;
     if (cfg_has_wifi() && !s_scanning) {
         ESP_LOGI(TAG, "reconnect timer: attempting Wi-Fi connection...");
@@ -87,7 +100,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
                           int32_t id, void *data)
 {
     if (id == WIFI_EVENT_STA_START) {
-        if (cfg_has_wifi()) {
+        if (cfg_has_wifi() && !s_wifi_ui_active) {
             esp_wifi_connect();
         }
         return;
@@ -96,8 +109,8 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         wx_set_wifi_connected(false);
         xEventGroupClearBits(s_events, WIFI_CONNECTED_BIT);
 
-        if (s_scanning) {
-            return;     /* deliberate disconnect; do not fight the scan */
+        if (s_scanning || s_wifi_ui_active) {
+            return;
         }
 
         if (!cfg_has_wifi()) {
@@ -183,10 +196,18 @@ static void start_sntp(void)
     net_set_timezone(c.timezone_idx);
 }
 
-esp_err_t net_start(void)
+esp_err_t net_init(void)
 {
+    if (s_events) {
+        return ESP_OK;
+    }
+
     s_events = xEventGroupCreate();
     if (!s_events) {
+        return ESP_ERR_NO_MEM;
+    }
+    s_wifi_lock = xSemaphoreCreateMutex();
+    if (!s_wifi_lock) {
         return ESP_ERR_NO_MEM;
     }
 
@@ -197,8 +218,6 @@ esp_err_t net_start(void)
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     esp_err_t err = esp_wifi_init(&init);
     if (err != ESP_OK) {
-        /* The single most likely failure on this board. Say so plainly rather
-         * than letting ESP_ERROR_CHECK abort with a bare error code. */
         ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));
         ESP_LOGE(TAG, "on the ESP32-P4 this almost always means the ESP-Hosted");
         ESP_LOGE(TAG, "link to the ESP32-C6 did not come up. Check that the C6");
@@ -211,7 +230,6 @@ esp_err_t net_start(void)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, &on_got_ip, NULL, NULL));
 
-    /* NVS first, secrets.h as the seed (never the Kconfig placeholder). */
     cfg_t c;
     cfg_get(&c);
     net_set_timezone(c.timezone_idx);
@@ -223,36 +241,70 @@ esp_err_t net_start(void)
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-    ESP_ERROR_CHECK(esp_wifi_start());
 
-    if (!cfg_has_wifi()) {
+    if (cfg_has_wifi()) {
+        wifi_config_t wcfg = {0};
+        strncpy((char *)wcfg.sta.ssid, c.wifi_ssid, sizeof(wcfg.sta.ssid) - 1);
+        strncpy((char *)wcfg.sta.password, c.wifi_password,
+                sizeof(wcfg.sta.password) - 1);
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wcfg));
+    }
+
+    ESP_LOGI(TAG, "network stack ready (radio deferred until UI is drawn)");
+    return ESP_OK;
+}
+
+esp_err_t net_wifi_begin(void)
+{
+    if (s_wifi_begun) {
+        return ESP_OK;
+    }
+
+    esp_err_t err = esp_wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_start: %s (C6 link not ready; will retry)",
+                 esp_err_to_name(err));
+        return err;
+    }
+    s_wifi_begun = true;
+
+    cfg_t c;
+    cfg_get(&c);
+    if (cfg_has_wifi()) {
+        ESP_LOGI(TAG, "connecting to %s", c.wifi_ssid);
+    } else {
         ESP_LOGW(TAG, "no wi-fi configured; open settings to connect");
-        return ESP_OK;
     }
+    return ESP_OK;
+}
 
-    wifi_config_t wcfg = {0};
-    strncpy((char *)wcfg.sta.ssid, c.wifi_ssid, sizeof(wcfg.sta.ssid) - 1);
-    strncpy((char *)wcfg.sta.password, c.wifi_password,
-            sizeof(wcfg.sta.password) - 1);
-    /* No authmode threshold: the settings screen can be pointed at an open
-     * network, and demanding WPA2 would silently refuse to associate. */
-
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wcfg));
-    /* A wall display has no battery concern and must not miss broadcast
-     * frames while dozing. Power save off is deliberate. */
-
-    ESP_LOGI(TAG, "connecting to %s", c.wifi_ssid);
-
-    EventBits_t bits = xEventGroupWaitBits(
-        s_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-        pdFALSE, pdFALSE, pdMS_TO_TICKS(CONNECT_TIMEOUT_MS));
-
-    if (bits & WIFI_CONNECTED_BIT) {
-        start_sntp();
-        return ESP_OK;
+static void wifi_begin_timer_cb(void *arg)
+{
+    (void)arg;
+    if (net_wifi_begin() == ESP_OK && s_wifi_begin_timer) {
+        esp_timer_stop(s_wifi_begin_timer);
     }
-    ESP_LOGW(TAG, "not connected yet; continuing, retries run in background");
-    return ESP_ERR_TIMEOUT;
+}
+
+void net_schedule_wifi_begin(void)
+{
+    if (s_wifi_begun) {
+        return;
+    }
+    if (net_wifi_begin() == ESP_OK) {
+        return;
+    }
+    if (!s_wifi_begin_timer) {
+        esp_timer_create_args_t t_args = {
+            .callback = wifi_begin_timer_cb,
+            .name     = "wifi_begin",
+        };
+        esp_timer_create(&t_args, &s_wifi_begin_timer);
+    }
+    if (s_wifi_begin_timer) {
+        esp_timer_stop(s_wifi_begin_timer);
+        esp_timer_start_periodic(s_wifi_begin_timer, 2000000); /* 2 s */
+    }
 }
 
 bool net_is_connected(void)
@@ -283,9 +335,42 @@ const char *net_current_ssid(void)
     return ssid;
 }
 
+bool net_wifi_scan_busy(void)
+{
+    return s_scanning;
+}
+
+void net_wifi_ui_active(bool active)
+{
+    s_wifi_ui_active = active;
+    if (active) {
+        s_retries = 0;
+        if (s_reconnect_timer) {
+            esp_timer_stop(s_reconnect_timer);
+        }
+        return;
+    }
+    if (cfg_has_wifi() && !net_is_connected() && !s_scanning) {
+        s_retries = 0;
+        esp_wifi_connect();
+    }
+}
+
+static void net_scan_finish(void)
+{
+    s_scanning = false;
+    s_retries = 0;
+    /* Deliberately do not esp_wifi_connect() here. The Wi-Fi setup screen
+     * owns connect after a scan; background retries would fight it. */
+}
+
 int net_scan(net_ap_t *out, int max_aps)
 {
     if (!out || max_aps <= 0) {
+        return -1;
+    }
+    if (xSemaphoreTake(s_wifi_lock, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        ESP_LOGW(TAG, "scan skipped: radio busy");
         return -1;
     }
 
@@ -308,18 +393,22 @@ int net_scan(net_ap_t *out, int max_aps)
     esp_err_t err = esp_wifi_scan_start(&scan, true);   /* blocking */
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "scan failed: %s", esp_err_to_name(err));
-        s_scanning = false;
-        esp_wifi_connect();
+        net_scan_finish();
+        xSemaphoreGive(s_wifi_lock);
         return -1;
     }
 
     uint16_t n = MAX_SCAN_APS;
     wifi_ap_record_t *recs = calloc(n, sizeof(wifi_ap_record_t));
     if (!recs) {
+        net_scan_finish();
+        xSemaphoreGive(s_wifi_lock);
         return -1;
     }
     if (esp_wifi_scan_get_ap_records(&n, recs) != ESP_OK) {
         free(recs);
+        net_scan_finish();
+        xSemaphoreGive(s_wifi_lock);
         return -1;
     }
 
@@ -352,12 +441,8 @@ int net_scan(net_ap_t *out, int max_aps)
     }
     free(recs);
 
-    /* Resume whatever we were doing before the scan. */
-    s_scanning = false;
-    s_retries = 0;
-    if (cfg_has_wifi()) {
-        esp_wifi_connect();
-    }
+    net_scan_finish();
+    xSemaphoreGive(s_wifi_lock);
 
     ESP_LOGI(TAG, "scan found %d network(s) (%u raw records)", written,
              (unsigned)n);
@@ -389,6 +474,11 @@ esp_err_t net_apply_credentials(const char *ssid, const char *password)
     if (!ssid || ssid[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
+    if (xSemaphoreTake(s_wifi_lock, pdMS_TO_TICKS(30000)) != pdTRUE) {
+        ESP_LOGW(TAG, "connect skipped: radio busy (scan in progress?)");
+        return ESP_ERR_TIMEOUT;
+    }
+
     cfg_set_wifi(ssid, password);
 
     wifi_config_t wcfg = {0};
@@ -404,10 +494,13 @@ esp_err_t net_apply_credentials(const char *ssid, const char *password)
     s_retries = 0;
     esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &wcfg);
     if (err != ESP_OK) {
+        xSemaphoreGive(s_wifi_lock);
         return err;
     }
     ESP_LOGI(TAG, "reconnecting to %s", ssid);
-    return esp_wifi_connect();
+    err = esp_wifi_connect();
+    xSemaphoreGive(s_wifi_lock);
+    return err;
 }
 
 int8_t net_get_rssi(void)

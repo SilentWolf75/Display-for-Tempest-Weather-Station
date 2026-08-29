@@ -3,6 +3,8 @@
 #include "board_pins.h"
 #include "display.h"
 #include "wx_state.h"
+#include "ui/wifi_setup.h"
+#include "ui/settings.h"
 
 #include <string.h>
 
@@ -23,6 +25,12 @@ static const char *TAG = "indoor";
 #ifndef CONFIG_INDOOR_POLL_INTERVAL_S
 #define CONFIG_INDOOR_POLL_INTERVAL_S 10
 #endif
+
+/* The Grove header sits on the display PCB. At ~85% backlight the AHT20 reads
+ * ~8 F high; the error scales with panel power. cfg.indoor_temp_offset_c is
+ * a user trim on top of this automatic correction. */
+#define INDOOR_HEAT_BASE_C    1.5f
+#define INDOOR_HEAT_BRIGHT_C  3.2f
 
 static i2c_master_dev_handle_t s_dev;
 static indoor_sensor_t         s_type;
@@ -138,6 +146,12 @@ static void detach(void)
     }
 }
 
+static float indoor_heat_correction_c(void)
+{
+    uint8_t pct = display_get_brightness();
+    return INDOOR_HEAT_BASE_C + INDOOR_HEAT_BRIGHT_C * ((float)pct / 100.0f);
+}
+
 static indoor_sensor_t probe(i2c_master_bus_handle_t bus)
 {
     if (i2c_master_probe(bus, AHT20_ADDR, PROBE_TIMEOUT) == ESP_OK) {
@@ -162,6 +176,13 @@ static void indoor_task(void *arg)
     i2c_master_bus_handle_t bus = (i2c_master_bus_handle_t)arg;
 
     while (1) {
+        if (wifi_setup_is_visible() || settings_is_visible()) {
+            /* GT911 and the Grove sensor share this bus. Polling the AHT20
+             * while settings/Wi-Fi overlays are up has hung touch reads. */
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
         if (s_type == INDOOR_SENSOR_NONE) {
             s_type = probe(bus);
             if (s_type == INDOOR_SENSOR_NONE) {
@@ -179,7 +200,8 @@ static void indoor_task(void *arg)
         if (err == ESP_OK) {
             cfg_t cfg;
             cfg_get(&cfg);
-            float t_cal = t + cfg.indoor_temp_offset_c;
+            float heat_c = indoor_heat_correction_c();
+            float t_cal = t - heat_c + cfg.indoor_temp_offset_c;
 
             /* Sanity gate */
             if (t_cal > -20.0f && t_cal < 70.0f && h >= 0.0f && h <= 100.0f) {
@@ -187,10 +209,12 @@ static void indoor_task(void *arg)
                 p.indoor_temp_c       = t_cal;
                 p.indoor_humidity_pct = h;
                 wx_update_indoor(&p);
-                ESP_LOGI(TAG, "Indoor sensor: raw %.1fF -> cal %.1fF (offset %+.1fF), hum %.0f%%",
+                ESP_LOGI(TAG,
+                         "Indoor: raw %.1fF - heat %.1fF trim %+.1fF -> %.1fF, hum %.0f%%",
                          (double)(t * 1.8f + 32.0f),
-                         (double)(t_cal * 1.8f + 32.0f),
+                         (double)(heat_c * 1.8f),
                          (double)(cfg.indoor_temp_offset_c * 1.8f),
+                         (double)(t_cal * 1.8f + 32.0f),
                          (double)h);
             } else {
                 ESP_LOGW(TAG, "implausible reading %.1fC (raw %.1fC) %.0f%%, ignoring",

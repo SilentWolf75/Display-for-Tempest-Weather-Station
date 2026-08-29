@@ -1,7 +1,6 @@
 #include "wifi_setup.h"
 #include "config.h"
 #include "net.h"
-#include "display.h"
 #include "audio.h"
 
 #include <stdio.h>
@@ -14,6 +13,8 @@
 #include "esp_log.h"
 
 static const char *TAG = "wifi_ui";
+
+bool settings_is_visible(void);
 
 /* Match the dashboard palette — dark surfaces, bright text, muted accents. */
 #define COL_BG          lv_color_hex(0x06090E)
@@ -39,6 +40,9 @@ static const char *TAG = "wifi_ui";
 
 #define MAX_APS       24
 #define SCAN_STACK    8192
+#define SCAN_PRIO     2
+#define CONNECT_STACK 8192
+#define CONNECT_PRIO  2
 #define CONNECT_WAIT_S  20
 #define SHIFT_DBL_MS    400
 #define SHIFT_BTN_SCAN  48
@@ -103,7 +107,6 @@ static const lv_buttonmatrix_ctrl_t s_kb_sym_ctrl[] = {
 };
 
 static lv_obj_t *s_screen;
-static lv_obj_t *s_prev;
 static lv_obj_t *s_list;
 static lv_obj_t *s_status;
 static lv_obj_t *s_scan_btn;
@@ -144,11 +147,36 @@ static void shift_reset(void);
 static void shift_update_visual(void);
 static void kb_set_letter_case(void);
 static void kb_add_char(const char *txt);
+static void update_pass_hint(void);
 
 static void set_status(const char *text, lv_color_t colour)
 {
     lv_label_set_text(s_status, text);
     lv_obj_set_style_text_color(s_status, colour, 0);
+}
+
+static void preload_saved_network(void)
+{
+    const char *saved = net_current_ssid();
+    if (!saved || saved[0] == '\0') {
+        return;
+    }
+    strncpy(s_chosen_ssid, saved, sizeof(s_chosen_ssid) - 1);
+    s_chosen_ssid[sizeof(s_chosen_ssid) - 1] = '\0';
+    s_chosen_open = false;
+    lv_label_set_text_fmt(s_chosen_lbl, "Password for %s", s_chosen_ssid);
+    lv_textarea_set_text(s_pass_ta, "");
+    lv_textarea_set_password_mode(s_pass_ta, !s_pass_visible);
+    lv_obj_clear_state(s_pass_ta, LV_STATE_DISABLED);
+    lv_textarea_set_placeholder_text(s_pass_ta, "tap here to type password");
+    set_connect_enabled(true);
+    update_pass_hint();
+}
+
+static void scan_deferred_cb(lv_timer_t *timer)
+{
+    start_scan();
+    lv_timer_delete(timer);
 }
 
 static const char *signal_words(int8_t rssi)
@@ -609,7 +637,7 @@ static void start_scan(void)
     lv_obj_add_state(s_scan_btn, LV_STATE_DISABLED);
     set_status("scanning...", COL_FOCUS);
 
-    if (xTaskCreate(scan_task, "wifi_scan", SCAN_STACK, NULL, 4, NULL)
+    if (xTaskCreate(scan_task, "wifi_scan", SCAN_STACK, NULL, SCAN_PRIO, NULL)
             != pdPASS) {
         s_scanning = false;
         lv_obj_clear_state(s_scan_btn, LV_STATE_DISABLED);
@@ -620,7 +648,11 @@ static void start_scan(void)
 static void on_scan(lv_event_t *e)
 {
     (void)e;
-    start_scan();
+    if (s_scanning || net_wifi_scan_busy()) {
+        return;
+    }
+    set_status("scanning...", COL_FOCUS);
+    lv_timer_create(scan_deferred_cb, 150, NULL);
 }
 
 typedef struct {
@@ -644,6 +676,11 @@ static void on_connect(lv_event_t *e)
         kb_click();
         return;
     }
+    if (s_scanning || net_wifi_scan_busy()) {
+        set_status("wait for scan to finish", COL_ALERT);
+        kb_click();
+        return;
+    }
     const char *pass = lv_textarea_get_text(s_pass_ta);
     if (!s_chosen_open && (!pass || pass[0] == '\0')) {
         set_status("enter the network password", COL_ALERT);
@@ -658,7 +695,7 @@ static void on_connect(lv_event_t *e)
         if (!s_chosen_open && pass) {
             strncpy(req->pass, pass, sizeof(req->pass) - 1);
         }
-        xTaskCreate(connect_worker_task, "wifi_conn", 6144, req, 4, NULL);
+        xTaskCreate(connect_worker_task, "wifi_conn", CONNECT_STACK, req, CONNECT_PRIO, NULL);
     }
 
     s_connecting = true;
@@ -738,11 +775,18 @@ static void style_keyboard(lv_obj_t *kb)
 
 esp_err_t wifi_setup_init(void)
 {
-    s_screen = lv_obj_create(NULL);
+    /* Overlay on lv_layer_top() — never lv_screen_load() here. Switching screens
+     * while the SDIO radio is active has repeatedly left the MIPI panel with
+     * backlight on and no framebuffer (light-blue edge glow). */
+    s_screen = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_screen, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(s_screen, 0, 0);
     lv_obj_set_style_bg_color(s_screen, COL_BG, 0);
     lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(s_screen, 0, 0);
+    lv_obj_set_style_border_width(s_screen, 0, 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *title = lv_label_create(s_screen);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
@@ -753,6 +797,7 @@ esp_err_t wifi_setup_init(void)
     lv_obj_t *done_btn = make_button(s_screen, 1024 - 150 - 24, 14, 150, 50,
                                      LV_SYMBOL_LEFT "  Done", on_back);
     s_scan_btn = make_button(s_screen, 150, 16, 130, 46, "Scan", on_scan);
+    lv_obj_add_flag(s_scan_btn, LV_OBJ_FLAG_HIDDEN);
 
     s_status = lv_label_create(s_screen);
     lv_obj_set_style_text_font(s_status, &lv_font_montserrat_16, 0);
@@ -827,7 +872,6 @@ esp_err_t wifi_setup_init(void)
     style_keyboard(s_keyboard);
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_keyboard, on_kb_custom, LV_EVENT_VALUE_CHANGED, NULL);
-    lv_obj_add_event_cb(s_keyboard, on_kb_ready, LV_EVENT_READY, NULL);
     shift_reset();
 
     s_kb_close_btn = make_button(s_screen, 0, 0, 484, 36,
@@ -887,6 +931,14 @@ void wifi_setup_tick(void)
                  net_current_ssid());
         set_status(buf, COL_OK);
     }
+
+    /* Keep the overlay painted if something else invalidated the layer. */
+    static uint32_t s_keepalive_ms;
+    uint32_t t = lv_tick_get();
+    if (t - s_keepalive_ms >= 1000) {
+        s_keepalive_ms = t;
+        lv_obj_invalidate(s_screen);
+    }
 }
 
 void wifi_setup_show(void)
@@ -894,10 +946,15 @@ void wifi_setup_show(void)
     if (!s_screen) {
         return;
     }
-    s_prev = lv_screen_active();
+    net_wifi_ui_active(true);
     s_connecting = false;
     s_pass_visible = false;
+    s_chosen_ssid[0] = '\0';
+    s_chosen_open = false;
+    clear_ap_highlight();
+    set_connect_enabled(false);
     kb_hide();
+    lv_textarea_set_text(s_pass_ta, "");
     lv_textarea_set_password_mode(s_pass_ta, true);
     lv_obj_t *eye = lv_obj_get_child(s_show_pass_btn, 0);
     if (eye) {
@@ -910,26 +967,50 @@ void wifi_setup_show(void)
                  net_current_ssid());
         set_status(buf, COL_OK);
     } else if (net_current_ssid()[0]) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "not connected (saved: %s)",
-                 net_current_ssid());
-        set_status(buf, COL_DIM);
+        preload_saved_network();
+        set_status("saved network loaded — tap Scan or Connect", COL_DIM);
     } else {
-        set_status("no network configured", COL_DIM);
+        set_status("tap Scan to find networks", COL_DIM);
     }
 
-    lv_screen_load(s_screen);
-    start_scan();
+    lv_obj_remove_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_screen);
+    lv_obj_invalidate(s_screen);
+
+    /* One-shot reconnect using saved NVS credentials — no scan, no keyboard. */
+    if (!net_is_connected() && net_current_ssid()[0] != '\0') {
+        connect_req_t *req = calloc(1, sizeof(connect_req_t));
+        if (req) {
+            strncpy(req->ssid, net_current_ssid(), sizeof(req->ssid) - 1);
+            cfg_t c;
+            cfg_get(&c);
+            strncpy(req->pass, c.wifi_password, sizeof(req->pass) - 1);
+            xTaskCreate(connect_worker_task, "wifi_conn", CONNECT_STACK, req,
+                        CONNECT_PRIO, NULL);
+            s_connecting = true;
+            s_connect_deadline = (int64_t)time(NULL) + CONNECT_WAIT_S;
+            set_status("reconnecting...", COL_FOCUS);
+        }
+    }
 }
 
 void wifi_setup_hide(void)
 {
-    if (s_prev) {
-        lv_screen_load(s_prev);
+    if (!s_screen) {
+        return;
+    }
+    kb_hide();
+    lv_obj_add_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
+    if (!settings_is_visible()) {
+        net_wifi_ui_active(false);
+    }
+    lv_obj_t *scr = lv_screen_active();
+    if (scr) {
+        lv_obj_invalidate(scr);
     }
 }
 
 bool wifi_setup_is_visible(void)
 {
-    return s_screen && lv_screen_active() == s_screen;
+    return s_screen && !lv_obj_has_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
 }

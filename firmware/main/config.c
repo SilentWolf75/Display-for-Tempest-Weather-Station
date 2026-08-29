@@ -1,5 +1,6 @@
 #include "config.h"
 
+#include <stddef.h>
 #include <string.h>
 #include <time.h>
 
@@ -49,7 +50,7 @@ static const cfg_t DEFAULTS = {
     .screensaver_brightness    = 50,
     .lightning_alert_sound     = true,
     .lightning_alert_voice     = false,
-    .indoor_temp_offset_c      = -5.17f, /* -9.3 F default board heat compensation */
+    .indoor_temp_offset_c      = 0.0f,   /* user trim; board heat is automatic */
 };
 
 typedef struct {
@@ -82,8 +83,13 @@ static void clamp(cfg_t *c)
     if (c->brightness_night > 100)     c->brightness_night = 100;
     c->screensaver_idle_min = 0;
     c->screensaver_brightness = 75;
-    if (c->indoor_temp_offset_c < -25.0f || c->indoor_temp_offset_c > 15.0f) {
-        c->indoor_temp_offset_c = -5.17f;
+    if (c->indoor_temp_offset_c < -10.0f || c->indoor_temp_offset_c > 10.0f) {
+        c->indoor_temp_offset_c = 0.0f;
+    }
+    /* Old firmware stored the full board correction here; indoor.c handles
+     * that automatically now. */
+    if (c->indoor_temp_offset_c < -6.0f && c->indoor_temp_offset_c > -4.5f) {
+        c->indoor_temp_offset_c = 0.0f;
     }
 }
 
@@ -121,24 +127,49 @@ esp_err_t cfg_init(void)
         return ESP_OK;
     }
 
-    uint8_t raw_buf[sizeof(stored_t) + 64];
-    memset(raw_buf, 0, sizeof(raw_buf));
-    size_t len = sizeof(raw_buf);
-    esp_err_t err = nvs_get_blob(h, NVS_BLOB_KEY, raw_buf, &len);
+    stored_t blob;
+    size_t len = sizeof(blob);
+    esp_err_t err = nvs_get_blob(h, NVS_BLOB_KEY, &blob, &len);
     nvs_close(h);
 
-    if (err == ESP_OK && len >= 2) {
-        size_t payload_len = len - 1;
-        if (payload_len > sizeof(cfg_t)) {
-            payload_len = sizeof(cfg_t);
-        }
-        memcpy(&s_cfg, raw_buf + 1, payload_len);
-        clamp(&s_cfg);
-        ESP_LOGI(TAG, "settings loaded and migrated: %s, day %u%%, night %u%%",
-                 (s_cfg.units == CFG_UNITS_METRIC) ? "metric" : "imperial",
-                 s_cfg.brightness_day, s_cfg.brightness_night);
-        persist(&s_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGI(TAG, "no saved settings blob");
         return ESP_OK;
+    }
+
+    if (len < sizeof(uint8_t) + offsetof(cfg_t, wifi_ssid)) {
+        ESP_LOGW(TAG, "settings blob too small (%u bytes)", (unsigned)len);
+        return ESP_OK;
+    }
+
+    if (blob.version != CFG_VERSION) {
+        ESP_LOGW(TAG, "settings version %u (expected %u); keeping Wi-Fi only",
+                 blob.version, CFG_VERSION);
+        if (cfg_wifi_ssid_usable(blob.cfg.wifi_ssid)) {
+            strncpy(s_cfg.wifi_ssid, blob.cfg.wifi_ssid, CFG_SSID_LEN - 1);
+            s_cfg.wifi_ssid[CFG_SSID_LEN - 1] = '\0';
+            strncpy(s_cfg.wifi_password, blob.cfg.wifi_password,
+                    CFG_PASSWORD_LEN - 1);
+            s_cfg.wifi_password[CFG_PASSWORD_LEN - 1] = '\0';
+            persist(&s_cfg);
+        }
+        return ESP_OK;
+    }
+
+    if (len < sizeof(stored_t)) {
+        ESP_LOGW(TAG, "settings blob truncated (%u bytes)", (unsigned)len);
+        return ESP_OK;
+    }
+
+    cfg_t before = blob.cfg;
+    s_cfg = blob.cfg;
+    clamp(&s_cfg);
+    ESP_LOGI(TAG, "settings loaded: %s, wifi '%s', day %u%%",
+             (s_cfg.units == CFG_UNITS_METRIC) ? "metric" : "imperial",
+             s_cfg.wifi_ssid[0] ? s_cfg.wifi_ssid : "(none)",
+             s_cfg.brightness_day);
+    if (memcmp(&before, &s_cfg, sizeof(cfg_t)) != 0) {
+        persist(&s_cfg);
     }
     return ESP_OK;
 }

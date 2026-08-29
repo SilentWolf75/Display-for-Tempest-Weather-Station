@@ -34,7 +34,6 @@ static const char *TAG = "settings";
 #define PANEL_W       476
 
 static lv_obj_t *s_screen;
-static lv_obj_t *s_prev_screen;
 
 static lv_obj_t *w_units;
 static lv_obj_t *w_tz;
@@ -534,6 +533,11 @@ static void on_zip_changed(lv_event_t *e)
 static void on_wifi(lv_event_t *e)
 {
     (void)e;
+    /* Full Wi-Fi UI touches the SDIO radio and has frozen the MIPI panel.
+     * When already connected, status in this screen is enough. */
+    if (net_is_connected()) {
+        return;
+    }
     wifi_setup_show();
 }
 
@@ -613,11 +617,16 @@ esp_err_t settings_init(void)
     audio_set_notification_volume(c.notification_volume);
     char buf[16];
 
-    s_screen = lv_obj_create(NULL);
+    /* Overlay — never lv_screen_load(); that has blanked the panel repeatedly. */
+    s_screen = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_screen, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(s_screen, 0, 0);
     lv_obj_set_style_bg_color(s_screen, COL_BG, 0);
     lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(s_screen, 0, 0);
+    lv_obj_set_style_border_width(s_screen, 0, 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
 
     /* --- Fixed Header --- */
     lv_obj_t *title = lv_label_create(s_screen);
@@ -668,7 +677,7 @@ esp_err_t settings_init(void)
     lv_obj_set_style_radius(wifi_btn, 8, 0);
     lv_obj_add_event_cb(wifi_btn, on_wifi, LV_EVENT_CLICKED, NULL);
     lv_obj_t *wl = lv_label_create(wifi_btn);
-    lv_label_set_text(wl, LV_SYMBOL_WIFI "  Set up");
+    lv_label_set_text(wl, LV_SYMBOL_WIFI "  Reconnect");
     lv_obj_set_style_text_font(wl, &lv_font_montserrat_16, 0);
     lv_obj_center(wl);
     y += ROW_H + 2;
@@ -1005,7 +1014,7 @@ esp_err_t settings_init(void)
     lv_obj_add_event_cb(w_windmax, on_windmax, LV_EVENT_VALUE_CHANGED, NULL);
     y += ROW_H + 8;
 
-    row_label(right, y, "Indoor Sensor Temp Offset");
+    row_label(right, y, "Indoor Temp Trim");
     w_temp_offset_val = value_label(right, y, "");
     float cur_offset_f = c.indoor_temp_offset_c * 1.8f;
     if (c.units == CFG_UNITS_METRIC) {
@@ -1016,7 +1025,7 @@ esp_err_t settings_init(void)
     w_temp_offset = lv_slider_create(right);
     lv_obj_set_size(w_temp_offset, PANEL_W - 28, 12);
     lv_obj_set_pos(w_temp_offset, 0, y + 36);
-    lv_slider_set_range(w_temp_offset, -250, 100);
+    lv_slider_set_range(w_temp_offset, -180, 100);
     int32_t init_slider_val = (int32_t)(cur_offset_f * 10.0f + (cur_offset_f >= 0 ? 0.5f : -0.5f));
     lv_slider_set_value(w_temp_offset, init_slider_val, LV_ANIM_OFF);
     lv_obj_add_event_cb(w_temp_offset, on_temp_offset, LV_EVENT_VALUE_CHANGED, NULL);
@@ -1089,28 +1098,52 @@ esp_err_t settings_init(void)
 
 void settings_show(void)
 {
-    if (!s_screen) return;
-    s_prev_screen = lv_screen_active();
+    if (!s_screen) {
+        return;
+    }
+    net_wifi_ui_active(true);
     sync_settings_toggles();
-    lv_screen_load(s_screen);
+    lv_obj_remove_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_screen);
+    lv_obj_invalidate(s_screen);
     settings_tick();
 }
 
 void settings_hide(void)
 {
-    if (s_prev_screen) {
-        lv_screen_load(s_prev_screen);
+    if (!s_screen) {
+        return;
+    }
+    if (w_kb) {
+        lv_obj_add_flag(w_kb, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_add_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
+    if (!wifi_setup_is_visible()) {
+        net_wifi_ui_active(false);
+    }
+    lv_obj_t *scr = lv_screen_active();
+    if (scr) {
+        lv_obj_invalidate(scr);
     }
 }
 
 bool settings_is_visible(void)
 {
-    return (lv_screen_active() == s_screen);
+    return s_screen && !lv_obj_has_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
 }
 
 void settings_tick(void)
 {
-    if (!settings_is_visible()) return;
+    if (!settings_is_visible()) {
+        return;
+    }
+
+    static uint32_t s_keepalive_ms;
+    uint32_t t = lv_tick_get();
+    if (t - s_keepalive_ms >= 1000) {
+        s_keepalive_ms = t;
+        lv_obj_invalidate(s_screen);
+    }
 
     if (w_wifi_sub) {
         if (net_is_connected()) {

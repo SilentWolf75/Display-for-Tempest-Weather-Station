@@ -27,6 +27,9 @@ void display_unlock(void);
 /* 0-100. No-op until the backlight pin in board_pins.h is verified. */
 void display_set_brightness(int percent);
 
+/* Last value passed to display_set_brightness() (0-100). */
+uint8_t display_get_brightness(void);
+
 /* Invalidate the active screen and poke the LVGL task to flush now. */
 void display_refresh_now(void);
 

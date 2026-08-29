@@ -1,5 +1,6 @@
 #include "display.h"
 #include "board_pins.h"
+#include "ui/ui.h"
 
 #include "esp_log.h"
 #include "esp_check.h"
@@ -41,6 +42,7 @@ static i2c_master_bus_handle_t    s_i2c;
 static lv_display_t              *s_disp;
 static bool                       s_backlight_ready;
 static bool                       s_backlight_pwm;
+static uint8_t                    s_brightness_pct = 100;
 
 static esp_err_t init_backlight(void)
 {
@@ -104,11 +106,16 @@ void display_refresh_now(void)
         return;
     }
     lv_obj_t *scr = lv_screen_active();
+    if (!scr) {
+        scr = ui_main_screen();
+    }
     if (scr) {
         lv_obj_invalidate(scr);
     }
+    for (int i = 0; i < 50; i++) {
+        lv_timer_handler();
+    }
     display_unlock();
-    lvgl_port_task_wake(LVGL_PORT_EVENT_DISPLAY, NULL);
 }
 
 void display_set_brightness(int percent)
@@ -130,12 +137,15 @@ void display_set_brightness(int percent)
 #else
         gpio_set_level(BOARD_LCD_BACKLIGHT_GPIO, on ? 1 : 0);
 #endif
+        s_brightness_pct = on ? 100 : 0;
         return;
     }
 
     if (percent < 60) {
         percent = 75; /* Guarantee solid bright backlight always */
     }
+
+    s_brightness_pct = (uint8_t)percent;
 
     uint32_t duty = 0;
     if (percent > 0) {
@@ -147,6 +157,11 @@ void display_set_brightness(int percent)
 
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BACKLIGHT_LEDC_CHANNEL, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BACKLIGHT_LEDC_CHANNEL);
+}
+
+uint8_t display_get_brightness(void)
+{
+    return s_brightness_pct;
 }
 
 /* ------------------------------------------------------------------------ */

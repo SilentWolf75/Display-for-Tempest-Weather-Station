@@ -55,7 +55,7 @@ typedef struct {
     uint8_t     screensaver_brightness; /* backlight % while screensaver active */
     bool        lightning_alert_sound; /* Short siren when strike within 6 mi */
     bool        lightning_alert_voice; /* Spoken proximity alert for lightning */
-    float       indoor_temp_offset_c;  /* Calibration offset for onboard PCB heat (-15..+10 C) */
+    float       indoor_temp_offset_c;  /* User trim on auto board-heat correction (-10..+10 C) */
 } cfg_t;
 
 esp_err_t cfg_init(void);

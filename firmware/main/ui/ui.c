@@ -203,15 +203,25 @@ static const char *resolve_conditions(const wx_state_t *s)
     return NULL;
 }
 
-static bool wx_is_night(const wx_state_t *s, int64_t now)
+static bool local_is_daytime(int64_t now)
 {
-    if (s->sunrise_epoch > 0 && s->sunset_epoch > 0) {
-        return now < s->sunrise_epoch || now >= s->sunset_epoch;
+    if (now < 1600000000LL) {
+        return true; /* SNTP not set — default to day icons */
     }
     struct tm lt;
     time_t t = (time_t)now;
     localtime_r(&t, &lt);
-    return lt.tm_hour < 6 || lt.tm_hour >= 20;
+    return lt.tm_hour >= 6 && lt.tm_hour < 20;
+}
+
+static bool wx_is_night(const wx_state_t *s, int64_t now)
+{
+    (void)s;
+    /* Meteocons -day/-night follows wall clock only. WeatherFlow's API icon
+     * and the station lux field both emit *-night on overcast mornings even
+     * when the forecast text says Partly Cloudy. Sensor overrides caused more
+     * false nights than they prevented. */
+    return !local_is_daytime(now);
 }
 
 /* Meteocons ships separate day/night assets; Open-Meteo always emits -day. */
@@ -226,6 +236,7 @@ static void slug_for_time_of_day(const char *slug, bool night, char *out, size_t
     if (night) {
         if (strcmp(slug, "clear-day") == 0) {
             strncpy(out, "clear-night", out_len - 1);
+            out[out_len - 1] = '\0';
             return;
         }
         const char *day = strstr(slug, "-day");
@@ -237,6 +248,7 @@ static void slug_for_time_of_day(const char *slug, bool night, char *out, size_t
     } else {
         if (strcmp(slug, "clear-night") == 0 || strcmp(slug, "starry-night") == 0) {
             strncpy(out, "clear-day", out_len - 1);
+            out[out_len - 1] = '\0';
             return;
         }
         const char *night_suffix = strstr(slug, "-night");
@@ -251,10 +263,20 @@ static void slug_for_time_of_day(const char *slug, bool night, char *out, size_t
     out[out_len - 1] = '\0';
 }
 
-static const char *resolve_icon_slug(const wx_state_t *s, int64_t now)
+static const char *icon_slug_for(const wx_state_t *s, int64_t now,
+                                 const char *base, bool force_day)
 {
     static char buf[WX_COND_STR_LEN];
-    bool night = wx_is_night(s, now);
+    bool night = force_day ? false : wx_is_night(s, now);
+    if (!base || !base[0]) {
+        base = night ? "clear-night" : "clear-day";
+    }
+    slug_for_time_of_day(base, night, buf, sizeof(buf));
+    return buf;
+}
+
+static const char *resolve_icon_slug(const wx_state_t *s, int64_t now)
+{
     const char *base = NULL;
 
     /* Live sensor overrides beat forecast slugs. */
@@ -262,7 +284,8 @@ static const char *resolve_icon_slug(const wx_state_t *s, int64_t now)
         if (s->rain_rate_mm_hr > 0.05f) {
             base = "rainy";
         } else if (s->strikes_3h > 0) {
-            base = night ? "possibly-thunderstorm-night" : "possibly-thunderstorm-day";
+            base = local_is_daytime(now) ? "possibly-thunderstorm-day"
+                                         : "possibly-thunderstorm-night";
         }
     }
 
@@ -270,12 +293,9 @@ static const char *resolve_icon_slug(const wx_state_t *s, int64_t now)
         base = s->current_icon;
     } else if (!base && s->forecast_days > 0 && s->forecast[0].icon[0]) {
         base = s->forecast[0].icon;
-    } else {
-        base = night ? "clear-night" : "clear-day";
     }
 
-    slug_for_time_of_day(base, night, buf, sizeof(buf));
-    return buf;
+    return icon_slug_for(s, now, base, local_is_daytime(now));
 }
 
 static void update_conditions_card(const wx_state_t *s, int64_t now)
@@ -290,7 +310,15 @@ static void update_conditions_card(const wx_state_t *s, int64_t now)
     }
 
     if (cond_icon) {
-        wx_icon_set(cond_icon, resolve_icon_slug(s, now));
+        const char *slug = resolve_icon_slug(s, now);
+        static char s_last_cond_slug[40];
+        if (strcmp(s_last_cond_slug, slug) != 0) {
+            ESP_LOGI(TAG, "conditions icon '%s' (api '%s')",
+                     slug, s->current_icon[0] ? s->current_icon : "(none)");
+            strncpy(s_last_cond_slug, slug, sizeof(s_last_cond_slug) - 1);
+            s_last_cond_slug[sizeof(s_last_cond_slug) - 1] = '\0';
+        }
+        wx_icon_set(cond_icon, slug);
     }
 
     if (s->forecast_days > 0) {
@@ -401,17 +429,25 @@ static const char *page_button_label(ui_page_t page)
     return labels[page];
 }
 
+lv_obj_t *ui_main_screen(void)
+{
+    return s_main_screen;
+}
+
 void ui_page_goto(ui_page_t page)
 {
     if (page >= UI_PAGE_COUNT) {
         return;
     }
 
+    /* Overlays only — lv_screen_load() during SDIO/Wi-Fi has repeatedly left
+     * the MIPI panel lit with no framebuffer. The dashboard screen stays
+     * active for the lifetime of the app. */
+    page2_hide();
+    graphs_hide();
+
     switch (page) {
     case UI_PAGE_DASHBOARD:
-        if (s_main_screen) {
-            lv_screen_load(s_main_screen);
-        }
         break;
     case UI_PAGE_INSIGHTS:
         page2_show();
@@ -425,6 +461,10 @@ void ui_page_goto(ui_page_t page)
 
     s_current_page = page;
     ui_sync_page_button_labels();
+
+    if (s_main_screen) {
+        lv_obj_invalidate(s_main_screen);
+    }
 }
 
 void ui_page_next(void)
@@ -445,7 +485,7 @@ void ui_attach_swipe_nav(lv_obj_t *screen)
 
 static void on_screen_swipe(lv_event_t *e)
 {
-    if (!s_ui_ready) {
+    if (!s_ui_ready || wifi_setup_is_visible() || settings_is_visible()) {
         return;
     }
 
@@ -1797,7 +1837,7 @@ static void update_mid_deck(const wx_state_t *s, int64_t now)
     }
 }
 
-static void update_forecast_deck(const wx_state_t *s)
+static void update_forecast_deck(const wx_state_t *s, int64_t now)
 {
     bool has_fcst = s->forecast_days > 0;
     char buf[16];
@@ -1873,7 +1913,12 @@ static void update_forecast_deck(const wx_state_t *s)
             lv_obj_set_style_text_color(fc[i].day, COL_DIM, 0);
         }
 
-        fc_set_icon(i, d->icon[0] ? d->icon : "unknown");
+        const char *icon_base = d->icon[0] ? d->icon : "unknown";
+        if (i == 0) {
+            fc_set_icon(i, icon_slug_for(s, now, icon_base, local_is_daytime(now)));
+        } else {
+            fc_set_icon(i, icon_slug_for(s, now, icon_base, true));
+        }
 
         set_text(fc[i].hi, "%.0f°", (double)U_TEMP(d->air_temp_high_c));
         set_text(fc[i].lo, "%.0f°", (double)U_TEMP(d->air_temp_low_c));
@@ -1900,13 +1945,10 @@ void ui_tick(void)
     int64_t now = (int64_t)time(NULL);
     apply_brightness(now);
 
-    if (s_forecast_dirty) {
-        s_forecast_dirty = false;
-        if (s_forecast_panel) {
-            lv_obj_invalidate(s_forecast_panel);
-        }
+    if (wifi_setup_is_visible()) {
+        wifi_setup_tick();
+        return;
     }
-
     if (settings_is_visible()) {
         settings_tick();
         return;
@@ -1919,15 +1961,23 @@ void ui_tick(void)
         page2_tick();
         return;
     }
-    if (wifi_setup_is_visible()) {
-        wifi_setup_tick();
-        return;
+
+    /* Keep the dashboard painted — catches rare cases where the DSI path
+     * stops flushing while the backlight stays on. */
+    static uint32_t s_dash_keepalive_ms;
+    uint32_t t = lv_tick_get();
+    if (t - s_dash_keepalive_ms >= 5000) {
+        s_dash_keepalive_ms = t;
+        if (s_main_screen) {
+            lv_obj_invalidate(s_main_screen);
+        }
     }
 
-    /* Recover if boot landed on an empty screen somehow. */
-    if (s_main_screen && lv_screen_active() != s_main_screen) {
-        lv_screen_load(s_main_screen);
-        lv_obj_invalidate(s_main_screen);
+    if (s_forecast_dirty) {
+        s_forecast_dirty = false;
+        if (s_forecast_panel) {
+            lv_obj_invalidate(s_forecast_panel);
+        }
     }
 
     wx_state_t s;
@@ -1938,7 +1988,7 @@ void ui_tick(void)
     check_lightning_sound(&s, now);
     update_top_deck(&s, now);
     update_mid_deck(&s, now);
-    update_forecast_deck(&s);
+    update_forecast_deck(&s, now);
 
     audio_scheduler_tick(now, s.current_icon);
 }

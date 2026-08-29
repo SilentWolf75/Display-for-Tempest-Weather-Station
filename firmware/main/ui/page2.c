@@ -59,7 +59,6 @@ static lv_color32_t s_moon_buf[MOON_ICON_SIZE * MOON_ICON_SIZE];
 static float s_moon_drawn_age = -1.0f;
 
 static lv_obj_t *s_screen;
-static lv_obj_t *s_prev_screen;
 static lv_obj_t *s_standby_overlay;
 static lv_obj_t *s_standby_clock;
 static lv_obj_t *s_subtitle;
@@ -527,11 +526,16 @@ static void build_hourly_panel(void)
 
 esp_err_t page2_init(void)
 {
-    s_screen = lv_obj_create(NULL);
+    /* Full-screen overlay on the dashboard — never a second LVGL screen. */
+    s_screen = lv_obj_create(ui_main_screen());
+    lv_obj_set_size(s_screen, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(s_screen, 0, 0);
     lv_obj_set_style_bg_color(s_screen, COL_BG, 0);
     lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(s_screen, 0, 0);
+    lv_obj_set_style_border_width(s_screen, 0, 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *title = lv_label_create(s_screen);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
@@ -561,20 +565,22 @@ void page2_show(void)
     if (!s_screen) {
         return;
     }
-    s_prev_screen = lv_screen_active();
-    lv_screen_load(s_screen);
+    lv_obj_remove_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_screen);
+    lv_obj_invalidate(s_screen);
 }
 
 void page2_hide(void)
 {
-    if (s_prev_screen) {
-        lv_screen_load(s_prev_screen);
+    if (!s_screen) {
+        return;
     }
+    lv_obj_add_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
 }
 
 bool page2_is_visible(void)
 {
-    return s_screen && lv_screen_active() == s_screen;
+    return s_screen && !lv_obj_has_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
 }
 
 bool page2_night_standby_active(void)

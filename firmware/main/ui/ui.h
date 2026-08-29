@@ -25,6 +25,9 @@ typedef enum {
 /* Builds the screen. Call with the LVGL lock held. */
 esp_err_t ui_init(void);
 
+/* The one LVGL screen — page overlays are children of this, never separate screens. */
+lv_obj_t *ui_main_screen(void);
+
 /* Cycle dashboard -> insights -> graphs -> dashboard. */
 void ui_page_next(void);
 void ui_page_prev(void);

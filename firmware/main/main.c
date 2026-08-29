@@ -16,6 +16,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
@@ -46,7 +47,53 @@
 static const char *TAG = "main";
 
 #define UI_TICK_PERIOD_MS   1000
-#define UI_LOCK_TIMEOUT_MS  100
+#define BOOT_UI_READY_BIT   BIT0
+
+static EventGroupHandle_t s_boot_events;
+static bool               s_display_up;
+
+static void signal_ui_ready(void)
+{
+    if (s_boot_events) {
+        xEventGroupSetBits(s_boot_events, BOOT_UI_READY_BIT);
+    }
+}
+
+/* Invalidate the dashboard and run the LVGL pump until the DSI path drains.
+ * Caller must hold the LVGL lock. */
+static void pump_ui_frames(int passes)
+{
+    lv_obj_t *scr = ui_main_screen();
+    if (scr) {
+        lv_obj_invalidate(scr);
+    }
+    for (int i = 0; i < passes; i++) {
+        lv_timer_handler();
+    }
+}
+
+/* SDIO (SD card mount + ESP-Hosted C6 reset) clobbers the MIPI pipeline after
+ * ui_init() paints. Repaint before the backlight goes on. */
+static void restore_panel_after_sdio(void)
+{
+    if (!s_display_up) {
+        return;
+    }
+
+    if (display_lock(10000)) {
+        pump_ui_frames(50);
+        display_unlock();
+        ESP_LOGI(TAG, "post-SDIO frame flushed");
+    } else {
+        ESP_LOGE(TAG, "post-SDIO refresh skipped: could not lock LVGL");
+    }
+
+    cfg_t c;
+    cfg_get(&c);
+    uint8_t b = c.brightness_day >= 75 ? c.brightness_day : 85;
+    display_set_brightness(b);
+    ESP_LOGI(TAG, "backlight on after post-SDIO refresh (%u%%)", b);
+}
 
 static void ui_timer_cb(lv_timer_t *timer)
 {
@@ -76,20 +123,21 @@ static void ui_init_task(void *pvParameters)
         ESP_LOGI(TAG, "Display locked; building UI widgets...");
         ui_init();
         lv_timer_create(ui_timer_cb, UI_TICK_PERIOD_MS, NULL);
-        display_unlock();
-        display_refresh_now();
-        ESP_LOGI(TAG, "UI initialized and display unlocked");
 
-        /* Turn on backlight smoothly now that the dark dashboard is rendered */
-        vTaskDelay(pdMS_TO_TICKS(60));
-        cfg_t c;
-        cfg_get(&c);
-        uint8_t b = c.brightness_day >= 75 ? c.brightness_day : 85;
-        display_set_brightness(b);
-        ESP_LOGI(TAG, "Backlight turned on (%u%%)", b);
+        /* Flush the full dashboard to the MIPI panel before any SDIO traffic
+         * (SD card mount, ESP-Hosted C6) runs. Unlock-then-invalidate left the
+         * backlight on with nothing on glass. */
+        lv_obj_t *scr = ui_main_screen();
+        if (scr) {
+            lv_obj_invalidate(scr);
+        }
+        pump_ui_frames(30);
+        display_unlock();
+        ESP_LOGI(TAG, "UI initialized (backlight deferred until post-SDIO)");
     } else {
         ESP_LOGE(TAG, "CRITICAL: Failed to lock display for UI initialization!");
     }
+    signal_ui_ready();
     vTaskDelete(NULL);
 }
 
@@ -128,25 +176,41 @@ void app_main(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "display init failed: %s", esp_err_to_name(err));
         ESP_LOGE(TAG, "check board_pins.h against the Elecrow schematic");
+        s_display_up = false;
         /* Keep going headless -- the serial log is still useful for the
          * Milestone 2 UDP test, which does not need a working panel. */
     } else {
+        s_display_up = true;
+        s_boot_events = xEventGroupCreate();
         xTaskCreatePinnedToCore(ui_init_task, "ui_init", 65536, NULL, 5, NULL, 1);
+        EventBits_t ui_bits = xEventGroupWaitBits(
+            s_boot_events, BOOT_UI_READY_BIT, pdFALSE, pdFALSE,
+            pdMS_TO_TICKS(90000));
+        if (!(ui_bits & BOOT_UI_READY_BIT)) {
+            ESP_LOGW(TAG, "UI did not finish within 90 s; continuing headless");
+        }
     }
 
-    /* Start MicroSD Card Storage before network/SDIO on Slot 1 */
+    /* SD card first while the backlight is still off. Mounting after Wi-Fi is
+     * up asserts in the ESP-Hosted SDIO driver — the two share sdmmc_host. */
     sdcard_start();
 
 #if CONFIG_TEMPEST_NETWORK_ENABLED
-    /* --- network: not fatal --- */
-    err = net_start();
+    err = net_init();
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "network not up yet (%s); retrying in background",
+        ESP_LOGW(TAG, "network stack init failed (%s); continuing headless",
                  esp_err_to_name(err));
+    } else {
+        net_schedule_wifi_begin();
     }
 #else
     ESP_LOGW(TAG, "display-only build: no Wi-Fi, no station data, no OTA");
 #endif
+
+    /* net_init() blocks until the ESP-Hosted coprocessor is up; a short settle
+     * is enough before the first visible frame. */
+    vTaskDelay(pdMS_TO_TICKS(300));
+    restore_panel_after_sdio();
 
 #if CONFIG_TEMPEST_NETWORK_ENABLED
 #if CONFIG_DIAG_ON_BOOT

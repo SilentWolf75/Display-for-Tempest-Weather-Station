@@ -12,9 +12,16 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
-/* Brings up netif, event loop, Wi-Fi, and starts SNTP once an IP is acquired.
- * Returns once the station has associated, or ESP_ERR_TIMEOUT. */
-esp_err_t net_start(void);
+/* Brings up netif, event loop, and Wi-Fi driver (no radio traffic yet).
+ * Call net_wifi_begin() after the first frame is on glass. */
+esp_err_t net_init(void);
+
+/* Starts the radio and connects. Safe to call once, after ui_init().
+ * Retries automatically if the ESP-Hosted C6 link is not up yet. */
+esp_err_t net_wifi_begin(void);
+
+/* Schedule net_wifi_begin() retries until the radio starts. */
+void net_schedule_wifi_begin(void);
 
 bool net_is_connected(void);
 int8_t net_get_rssi(void);
@@ -47,3 +54,10 @@ void net_set_timezone(int tz_idx);
 /* Writes the STA IPv4 address as dotted decimal. Returns false when Wi-Fi
  * is down or DHCP has not assigned an address yet. */
 bool net_get_ip(char *buf, size_t len);
+
+/* True while net_scan() holds the radio for a site survey. */
+bool net_wifi_scan_busy(void);
+
+/* Pause background connect retries while the Wi-Fi setup screen is open.
+ * Without this, esp_wifi_connect() loops fight scan/connect from the UI. */
+void net_wifi_ui_active(bool active);
