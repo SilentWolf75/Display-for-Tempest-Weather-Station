@@ -146,7 +146,7 @@ static void handle_device_status(const cJSON *root)
                             (uint32_t)obj_int(root, "sensor_status", 0));
 }
 
-static void dispatch(const char *json, int len)
+void tempest_ingest_message(const char *json, int len)
 {
     cJSON *root = cJSON_ParseWithLength(json, len);
     if (!root) {
@@ -234,7 +234,7 @@ static void udp_task(void *arg)
             buf[len] = '\0';
             s_packets++;
             wx_note_udp_packet();
-            dispatch(buf, len);
+            tempest_ingest_message(buf, len);
         }
 
         if (s_sock >= 0) {

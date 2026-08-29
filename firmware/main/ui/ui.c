@@ -13,6 +13,7 @@
 #include "audio.h"
 #include "nws_alerts.h"
 #include "ota.h"
+#include "tempest_ws.h"
 
 #include "sdkconfig.h"
 
@@ -181,6 +182,11 @@ typedef struct {
 } fc_col_t;
 
 static fc_col_t fc[FC_COLS];
+static bool     s_fc_lottie;
+static bool     s_fc_rebuild;
+
+static void rebuild_forecast_icons(void);
+static void fc_set_icon(int idx, const char *slug);
 
 static void on_gear(lv_event_t *e);
 static void on_page_btn(lv_event_t *e);
@@ -217,6 +223,7 @@ static bool       s_swipe_handled;
 
 static uint32_t   s_last_input_ms;
 static bool       s_screensaver_active;
+static int64_t    s_ltg_sound_epoch;
 static uint8_t    s_scheduled_brightness;
 
 void ui_note_user_activity(void)
@@ -1002,6 +1009,57 @@ static void build_mid_deck(lv_obj_t *scr)
     }
 }
 
+static void fc_set_icon(int idx, const char *slug)
+{
+    if (!slug || !slug[0] || idx < 0 || idx >= FC_COLS || !fc[idx].icon) {
+        return;
+    }
+    if (s_fc_lottie) {
+        wx_icon_set(fc[idx].icon, slug);
+    } else {
+        const lv_image_dsc_t *dsc = wx_icon_get_image_dsc(slug);
+        if (dsc) {
+            lv_image_set_src(fc[idx].icon, dsc);
+        }
+    }
+}
+
+static void rebuild_forecast_icons(void)
+{
+    cfg_t c;
+    cfg_get(&c);
+    bool want_lottie = c.animate_forecast;
+    if (want_lottie == s_fc_lottie && !s_fc_rebuild) {
+        return;
+    }
+    s_fc_lottie = want_lottie;
+
+    for (int i = 0; i < FC_COLS; i++) {
+        if (!fc[i].card) {
+            continue;
+        }
+        if (fc[i].icon) {
+            lv_obj_delete(fc[i].icon);
+            fc[i].icon = NULL;
+        }
+        const int col_w = (SCR_W - 2 * PAD - 16) / FC_COLS;
+        const int cx = col_w / 2;
+        if (s_fc_lottie) {
+            fc[i].icon = wx_icon_create(fc[i].card, 44, true);
+        } else {
+            fc[i].icon = lv_image_create(fc[i].card);
+            lv_obj_set_size(fc[i].icon, 44, 44);
+        }
+        lv_obj_set_pos(fc[i].icon, cx - 22, 22);
+    }
+    s_fc_rebuild = false;
+}
+
+void ui_forecast_mode_changed(void)
+{
+    s_fc_rebuild = true;
+}
+
 static void build_forecast_deck(lv_obj_t *scr)
 {
     lv_obj_t *p = make_card(scr, PAD, FC_Y, SCR_W - 2 * PAD, FC_H, COL_CARD_BORDER, COL_TEMP_AMBER);
@@ -1022,10 +1080,8 @@ static void build_forecast_deck(lv_obj_t *scr)
 
         fc[i].day = clabel(col_card, cx, 2, col_w, &lv_font_montserrat_14, COL_DIM, (i == 0) ? "TODAY" : "--");
 
-        /* 44px Native Weather Icon */
-        fc[i].icon = lv_image_create(col_card);
-        lv_obj_set_size(fc[i].icon, 44, 44);
-        lv_obj_set_pos(fc[i].icon, cx - 22, 22);
+        /* Icon widget created in rebuild_forecast_icons(). */
+        fc[i].icon = NULL;
 
         fc[i].pop = clabel(col_card, cx, 70, col_w, &lv_font_montserrat_14, COL_RAIN_NEON, "");
 
@@ -1071,6 +1127,7 @@ static void build_forecast_deck(lv_obj_t *scr)
             lv_obj_clear_flag(sep, LV_OBJ_FLAG_SCROLLABLE);
         }
     }
+    rebuild_forecast_icons();
 }
 
 static void on_gear(lv_event_t *e)
@@ -1104,22 +1161,26 @@ static void apply_brightness(int64_t now)
     }
     s_scheduled_brightness = target;
 
-#if CONFIG_SCREENSAVER_IDLE_MIN > 0
-    if (!settings_is_visible() && !wifi_setup_is_visible() && !ota_in_progress()) {
+    cfg_t cfg_scr;
+    cfg_get(&cfg_scr);
+    if (cfg_scr.screensaver_idle_min > 0 &&
+        !settings_is_visible() && !wifi_setup_is_visible() && !ota_in_progress()) {
         uint32_t idle_ms = lv_tick_get() - s_last_input_ms;
-        uint32_t limit_ms = (uint32_t)CONFIG_SCREENSAVER_IDLE_MIN * 60U * 1000U;
+        uint32_t limit_ms = (uint32_t)cfg_scr.screensaver_idle_min * 60U * 1000U;
         if (idle_ms >= limit_ms) {
             if (!s_screensaver_active) {
                 s_screensaver_active = true;
-                ESP_LOGI(TAG, "screensaver on (%d min idle)", CONFIG_SCREENSAVER_IDLE_MIN);
+                ESP_LOGI(TAG, "screensaver on (%u min idle)",
+                         cfg_scr.screensaver_idle_min);
             }
-            target = (uint8_t)CONFIG_SCREENSAVER_BRIGHTNESS;
+            target = cfg_scr.screensaver_brightness;
         }
     }
-#endif
 
     if (s_screensaver_active) {
-        target = (uint8_t)CONFIG_SCREENSAVER_BRIGHTNESS;
+        cfg_t c2;
+        cfg_get(&c2);
+        target = c2.screensaver_brightness;
     }
 
     static uint8_t last_applied;
@@ -1188,6 +1249,42 @@ static void update_hdr_aqi(const wx_state_t *s)
     } else {
         lv_obj_add_flag(hdr_aqi_dot, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(hdr_aqi_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void check_lightning_sound(const wx_state_t *s, int64_t now)
+{
+    bool ltg_near = s->last_strike_epoch > 0 &&
+                    s->last_strike_dist_km > 0.0f &&
+                    s->last_strike_dist_km <= LIGHTNING_NEAR_KM &&
+                    (now - s->last_strike_epoch) < 3 * 3600;
+
+    if (!ltg_near || s->last_strike_epoch == s_ltg_sound_epoch) {
+        return;
+    }
+
+    cfg_t c;
+    cfg_get(&c);
+    if (!c.lightning_alert_sound && !c.lightning_alert_voice) {
+        return;
+    }
+    if (audio_is_playing()) {
+        return;
+    }
+
+    s_ltg_sound_epoch = s->last_strike_epoch;
+    ESP_LOGW(TAG, "lightning %.1f km — proximity alert",
+             (double)s->last_strike_dist_km);
+
+    if (c.lightning_alert_sound) {
+        audio_play_eas_siren(2);
+    }
+    if (c.lightning_alert_voice) {
+        char msg[96];
+        float dist = cfg_distance(s->last_strike_dist_km);
+        snprintf(msg, sizeof(msg), "Lightning detected %.0f %s away.",
+                 (double)dist, cfg_distance_suffix());
+        audio_play_tts(msg);
     }
 }
 
@@ -1330,6 +1427,9 @@ static void update_header(const wx_state_t *s, int64_t now)
     if (!s->wifi_connected) {
         lv_obj_set_style_bg_color(hdr_dot, COL_ALERT, 0);
         lv_label_set_text(hdr_station, "NO WI-FI");
+    } else if (wx_udp_is_stale(s) && tempest_ws_is_active()) {
+        lv_obj_set_style_bg_color(hdr_dot, COL_TEMP_AMBER, 0);
+        lv_label_set_text(hdr_station, "WS LINK");
     } else if (wx_udp_is_stale(s)) {
         lv_obj_set_style_bg_color(hdr_dot, COL_TEMP_AMBER, 0);
         lv_label_set_text(hdr_station, "NO UDP");
@@ -1367,6 +1467,9 @@ static void update_top_deck(const wx_state_t *s, int64_t now)
     if (!s->wifi_connected) {
         lv_label_set_text(cond_badge, "OFFLINE");
         lv_obj_set_style_text_color(cond_badge, COL_ALERT, 0);
+    } else if (wx_udp_is_stale(s) && tempest_ws_is_active()) {
+        lv_label_set_text(cond_badge, "WS LINK");
+        lv_obj_set_style_text_color(cond_badge, COL_WIND_NEON, 0);
     } else if (wx_udp_is_stale(s)) {
         lv_label_set_text(cond_badge, "NO LINK");
         lv_obj_set_style_text_color(cond_badge, COL_TEMP_AMBER, 0);
@@ -1736,7 +1839,8 @@ static void update_forecast_deck(const wx_state_t *s)
                 lv_label_set_text(fc[i].day, buf);
                 lv_obj_set_style_text_color(fc[i].day, COL_WIND_NEON, 0);
                 const lv_image_dsc_t *dsc = wx_icon_get_image_dsc("clear-day");
-                if (dsc && fc[i].icon) lv_image_set_src(fc[i].icon, dsc);
+                if (dsc && fc[i].icon && !s_fc_lottie) lv_image_set_src(fc[i].icon, dsc);
+                else fc_set_icon(i, "clear-day");
                 if (s->daily_valid) {
                     set_text(fc[i].hi, "%.0f°", (double)U_TEMP(s->temp_high_today_c));
                     set_text(fc[i].lo, "%.0f°", (double)U_TEMP(s->temp_low_today_c));
@@ -1749,7 +1853,8 @@ static void update_forecast_deck(const wx_state_t *s)
                 lv_label_set_text(fc[i].day, buf);
                 lv_obj_set_style_text_color(fc[i].day, COL_DIM, 0);
                 const lv_image_dsc_t *dsc = wx_icon_get_image_dsc("clear-day");
-                if (dsc && fc[i].icon) lv_image_set_src(fc[i].icon, dsc);
+                if (dsc && fc[i].icon && !s_fc_lottie) lv_image_set_src(fc[i].icon, dsc);
+                else fc_set_icon(i, "clear-day");
                 set_text(fc[i].hi, "--°");
                 set_text(fc[i].lo, "--°");
             }
@@ -1790,10 +1895,7 @@ static void update_forecast_deck(const wx_state_t *s)
             lv_obj_set_style_text_color(fc[i].day, COL_DIM, 0);
         }
 
-        const lv_image_dsc_t *dsc = wx_icon_get_image_dsc(d->icon);
-        if (dsc && fc[i].icon) {
-            lv_image_set_src(fc[i].icon, dsc);
-        }
+        fc_set_icon(i, d->icon[0] ? d->icon : "unknown");
 
         set_text(fc[i].hi, "%.0f°", (double)U_TEMP(d->air_temp_high_c));
         set_text(fc[i].lo, "%.0f°", (double)U_TEMP(d->air_temp_low_c));
@@ -1841,6 +1943,10 @@ void ui_tick(void)
     int64_t now = (int64_t)time(NULL);
     apply_brightness(now);
 
+    if (s_fc_rebuild) {
+        rebuild_forecast_icons();
+    }
+
     if (settings_is_visible()) {
         settings_tick();
         return;
@@ -1863,6 +1969,7 @@ void ui_tick(void)
 
     update_header(&s, now);
     update_alert_banner(&s, now);
+    check_lightning_sound(&s, now);
     update_top_deck(&s, now);
     update_mid_deck(&s, now);
     update_forecast_deck(&s);

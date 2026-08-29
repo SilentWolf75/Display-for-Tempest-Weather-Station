@@ -44,6 +44,10 @@ static lv_obj_t *w_night_en;
 static lv_obj_t *w_night_start, *w_night_start_val;
 static lv_obj_t *w_night_end, *w_night_end_val;
 static lv_obj_t *w_animate;
+static lv_obj_t *w_ss_idle, *w_ss_idle_val;
+static lv_obj_t *w_ss_dim, *w_ss_dim_val;
+static lv_obj_t *w_ltg_sound_sw;
+static lv_obj_t *w_ltg_voice_sw;
 static lv_obj_t *w_windmax, *w_windmax_val;
 static lv_obj_t *w_diag;
 static lv_obj_t *w_sd, *w_sd_btn, *w_sd_btn_lbl;
@@ -287,6 +291,57 @@ static void on_windmax(lv_event_t *e)
                           cfg_wind_suffix());
 }
 
+static void on_animate_toggle(lv_event_t *e)
+{
+    cfg_t c;
+    cfg_get(&c);
+    c.animate_forecast = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    cfg_set(&c);
+    ui_forecast_mode_changed();
+}
+
+static void on_ss_idle(lv_event_t *e)
+{
+    cfg_t c;
+    cfg_get(&c);
+    c.screensaver_idle_min = (uint8_t)lv_slider_get_value(lv_event_get_target(e));
+    cfg_set(&c);
+    if (w_ss_idle_val) {
+        if (c.screensaver_idle_min == 0) {
+            lv_label_set_text(w_ss_idle_val, "Off");
+        } else {
+            lv_label_set_text_fmt(w_ss_idle_val, "%u min", c.screensaver_idle_min);
+        }
+    }
+}
+
+static void on_ss_dim(lv_event_t *e)
+{
+    cfg_t c;
+    cfg_get(&c);
+    c.screensaver_brightness = (uint8_t)lv_slider_get_value(lv_event_get_target(e));
+    cfg_set(&c);
+    if (w_ss_dim_val) {
+        lv_label_set_text_fmt(w_ss_dim_val, "%u%%", c.screensaver_brightness);
+    }
+}
+
+static void on_ltg_sound_toggle(lv_event_t *e)
+{
+    cfg_t c;
+    cfg_get(&c);
+    c.lightning_alert_sound = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    cfg_set(&c);
+}
+
+static void on_ltg_voice_toggle(lv_event_t *e)
+{
+    cfg_t c;
+    cfg_get(&c);
+    c.lightning_alert_voice = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    cfg_set(&c);
+}
+
 static void on_alert_volume(lv_event_t *e)
 {
     cfg_t c;
@@ -466,6 +521,8 @@ static void on_reset(lv_event_t *e)
     lv_slider_set_value(w_night_start, c.night_start_hour, LV_ANIM_ON);
     lv_slider_set_value(w_night_end, c.night_end_hour, LV_ANIM_ON);
     lv_slider_set_value(w_windmax, c.wind_scale_max_ms, LV_ANIM_ON);
+    lv_slider_set_value(w_ss_idle, c.screensaver_idle_min, LV_ANIM_ON);
+    lv_slider_set_value(w_ss_dim, c.screensaver_brightness, LV_ANIM_ON);
     lv_slider_set_value(w_vol_slider, c.alert_volume, LV_ANIM_ON);
     lv_slider_set_value(w_notif_vol_slider, c.notification_volume, LV_ANIM_ON);
     lv_label_set_text_fmt(w_day_val, "%u%%", c.brightness_day);
@@ -479,6 +536,16 @@ static void on_reset(lv_event_t *e)
     else                     lv_obj_clear_state(w_night_en, LV_STATE_CHECKED);
     if (c.alert_siren_enabled) lv_obj_add_state(w_alert_siren_sw, LV_STATE_CHECKED);
     else                       lv_obj_clear_state(w_alert_siren_sw, LV_STATE_CHECKED);
+    if (c.lightning_alert_sound) lv_obj_add_state(w_ltg_sound_sw, LV_STATE_CHECKED);
+    else                         lv_obj_clear_state(w_ltg_sound_sw, LV_STATE_CHECKED);
+    if (c.lightning_alert_voice) lv_obj_add_state(w_ltg_voice_sw, LV_STATE_CHECKED);
+    else                         lv_obj_clear_state(w_ltg_voice_sw, LV_STATE_CHECKED);
+    if (c.animate_forecast) lv_obj_add_state(w_animate, LV_STATE_CHECKED);
+    else                    lv_obj_clear_state(w_animate, LV_STATE_CHECKED);
+    if (c.screensaver_idle_min == 0) lv_label_set_text(w_ss_idle_val, "Off");
+    else lv_label_set_text_fmt(w_ss_idle_val, "%u min", c.screensaver_idle_min);
+    lv_label_set_text_fmt(w_ss_dim_val, "%u%%", c.screensaver_brightness);
+    ui_forecast_mode_changed();
 
     audio_set_alert_volume(c.alert_volume);
     audio_set_notification_volume(c.notification_volume);
@@ -656,6 +723,32 @@ esp_err_t settings_init(void)
     lv_obj_add_event_cb(w_night_end, on_night_end, LV_EVENT_VALUE_CHANGED, NULL);
     y += ROW_H + 8;
 
+    row_label(left, y, "Screensaver Idle (0 = off)");
+    w_ss_idle_val = value_label(left, y, "");
+    if (c.screensaver_idle_min == 0) {
+        lv_label_set_text(w_ss_idle_val, "Off");
+    } else {
+        lv_label_set_text_fmt(w_ss_idle_val, "%u min", c.screensaver_idle_min);
+    }
+    w_ss_idle = lv_slider_create(left);
+    lv_obj_set_size(w_ss_idle, PANEL_W - 28, 12);
+    lv_obj_set_pos(w_ss_idle, 0, y + 36);
+    lv_slider_set_range(w_ss_idle, 0, 60);
+    lv_slider_set_value(w_ss_idle, c.screensaver_idle_min, LV_ANIM_OFF);
+    lv_obj_add_event_cb(w_ss_idle, on_ss_idle, LV_EVENT_VALUE_CHANGED, NULL);
+    y += ROW_H + 8;
+
+    row_label(left, y, "Screensaver Brightness");
+    w_ss_dim_val = value_label(left, y, "");
+    lv_label_set_text_fmt(w_ss_dim_val, "%u%%", c.screensaver_brightness);
+    w_ss_dim = lv_slider_create(left);
+    lv_obj_set_size(w_ss_dim, PANEL_W - 28, 12);
+    lv_obj_set_pos(w_ss_dim, 0, y + 36);
+    lv_slider_set_range(w_ss_dim, 1, 50);
+    lv_slider_set_value(w_ss_dim, c.screensaver_brightness, LV_ANIM_OFF);
+    lv_obj_add_event_cb(w_ss_dim, on_ss_dim, LV_EVENT_VALUE_CHANGED, NULL);
+    y += ROW_H + 8;
+
     row_label(left, y, "Night Standby Clock");
     w_night_standby_sw = lv_switch_create(left);
     lv_obj_set_size(w_night_standby_sw, 64, 34);
@@ -745,6 +838,26 @@ esp_err_t settings_init(void)
         lv_obj_add_state(w_alert_siren_sw, LV_STATE_CHECKED);
     }
     lv_obj_add_event_cb(w_alert_siren_sw, on_alert_siren_toggle, LV_EVENT_VALUE_CHANGED, NULL);
+    y += ROW_H + 4;
+
+    row_label(right, y, "Lightning Proximity Sound");
+    w_ltg_sound_sw = lv_switch_create(right);
+    lv_obj_set_size(w_ltg_sound_sw, 64, 34);
+    lv_obj_align(w_ltg_sound_sw, LV_ALIGN_TOP_RIGHT, 0, y + 4);
+    if (c.lightning_alert_sound) {
+        lv_obj_add_state(w_ltg_sound_sw, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(w_ltg_sound_sw, on_ltg_sound_toggle, LV_EVENT_VALUE_CHANGED, NULL);
+    y += ROW_H + 4;
+
+    row_label(right, y, "Lightning Voice Alert");
+    w_ltg_voice_sw = lv_switch_create(right);
+    lv_obj_set_size(w_ltg_voice_sw, 64, 34);
+    lv_obj_align(w_ltg_voice_sw, LV_ALIGN_TOP_RIGHT, 0, y + 4);
+    if (c.lightning_alert_voice) {
+        lv_obj_add_state(w_ltg_voice_sw, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(w_ltg_voice_sw, on_ltg_voice_toggle, LV_EVENT_VALUE_CHANGED, NULL);
     y += ROW_H + 4;
 
     lv_obj_t *test_btn = lv_button_create(right);
@@ -840,6 +953,16 @@ esp_err_t settings_init(void)
     lv_slider_set_value(w_windmax, c.wind_scale_max_ms, LV_ANIM_OFF);
     lv_obj_add_event_cb(w_windmax, on_windmax, LV_EVENT_VALUE_CHANGED, NULL);
     y += ROW_H + 8;
+
+    row_label(right, y, "Animate 7-Day Forecast Icons");
+    w_animate = lv_switch_create(right);
+    lv_obj_set_size(w_animate, 64, 34);
+    lv_obj_align(w_animate, LV_ALIGN_TOP_RIGHT, 0, y + 4);
+    if (c.animate_forecast) {
+        lv_obj_add_state(w_animate, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(w_animate, on_animate_toggle, LV_EVENT_VALUE_CHANGED, NULL);
+    y += ROW_H + 4;
 
     /* --- microSD --- */
     row_label(right, y, "microSD Card");

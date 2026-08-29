@@ -849,3 +849,16 @@ esp_err_t tempest_rest_start(void)
     }
     return ESP_OK;
 }
+
+int tempest_rest_device_id(void)
+{
+    return s_device_id;
+}
+
+esp_err_t tempest_rest_ensure_device_id(void)
+{
+    if (TEMPEST_API_TOKEN[0] == '\0') {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return discover_device_id();
+}

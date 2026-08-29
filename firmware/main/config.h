@@ -51,6 +51,10 @@ typedef struct {
     bool        web_server_enabled;  /* Local Web Dashboard (http://tempest.local) */
     bool        mqtt_enabled;        /* Home Assistant MQTT Auto-Discovery */
     char        mqtt_broker[64];     /* MQTT broker host/IP */
+    uint8_t     screensaver_idle_min; /* 0 = off; minutes of no touch before dim */
+    uint8_t     screensaver_brightness; /* backlight % while screensaver active */
+    bool        lightning_alert_sound; /* Short siren when strike within 6 mi */
+    bool        lightning_alert_voice; /* Spoken proximity alert for lightning */
 } cfg_t;
 
 esp_err_t cfg_init(void);

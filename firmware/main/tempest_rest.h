@@ -24,3 +24,9 @@ esp_err_t tempest_rest_backfill_history(void);
 /* Fetch once, synchronously. Useful at boot so the screen is not empty while
  * waiting out the first poll interval. */
 esp_err_t tempest_rest_fetch_now(void);
+
+/* Returns the Tempest device_id (0 until discovered). */
+int tempest_rest_device_id(void);
+
+/* Blocks until device_id is known or discovery fails. */
+esp_err_t tempest_rest_ensure_device_id(void);

@@ -30,6 +30,7 @@
 #include "net.h"
 #include "tempest_udp.h"
 #include "tempest_rest.h"
+#include "tempest_ws.h"
 #include "indoor.h"
 #include "audio.h"
 #include "nws_alerts.h"
@@ -145,6 +146,7 @@ void app_main(void)
 
     /* --- live data --- */
     ESP_ERROR_CHECK(tempest_udp_start());
+    ESP_ERROR_CHECK(tempest_ws_start());
 #endif
 
     /* --- forecast: the only cloud feed ---

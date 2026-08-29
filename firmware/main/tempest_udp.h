@@ -19,3 +19,6 @@ void      tempest_udp_stop(void);
 /* Datagrams received since boot -- a cheap health signal for the UI, and the
  * thing to watch during the Milestone 2 broadcast-through-ESP-Hosted test. */
 uint32_t  tempest_udp_packet_count(void);
+
+/* Shared ingest path for UDP datagrams and WebSocket frames. */
+void      tempest_ingest_message(const char *json, int len);

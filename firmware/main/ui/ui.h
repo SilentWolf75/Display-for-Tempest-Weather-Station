@@ -44,3 +44,6 @@ void ui_tick(void);
 
 /* Call on touch or button press so the screensaver backs off. */
 void ui_note_user_activity(void);
+
+/* Rebuild forecast-strip icons after animate_forecast changes in settings. */
+void ui_forecast_mode_changed(void);

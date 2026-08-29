@@ -25,6 +25,7 @@ idf_component_register(
         "web_server.c"
         "mqtt_client_app.c"
         "wx_astronomy.c"
+        "tempest_ws.c"
     INCLUDE_DIRS
         "."
         "ui"
@@ -49,4 +50,5 @@ idf_component_register(
         esp_http_server
         mqtt
         mdns
+        esp_websocket_client
 )

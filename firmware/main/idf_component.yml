@@ -57,3 +57,7 @@ dependencies:
   ## mDNS for http://tempest.local (web dashboard hostname).
   espressif/mdns:
     version: "*"
+
+  ## WebSocket fallback when LAN UDP goes silent.
+  espressif/esp_websocket_client:
+    version: "*"

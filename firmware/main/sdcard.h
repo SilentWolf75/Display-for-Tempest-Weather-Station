@@ -70,3 +70,6 @@ sdcard_fmt_state_t sdcard_format_state(void);
 /* Appends one row to /sdcard/weather/YYYY_MM.csv, at most once a minute.
  * Safe to call often; it rate-limits itself and no-ops when unmounted. */
 esp_err_t sdcard_log_weather(const wx_state_t *s, int64_t now_epoch);
+
+/* Path to this month's CSV log file. */
+esp_err_t sdcard_current_log_path(char *path, size_t path_len);

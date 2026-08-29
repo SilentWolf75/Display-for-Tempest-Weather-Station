@@ -333,3 +333,30 @@ esp_err_t sdcard_log_weather(const wx_state_t *s, int64_t now_epoch)
     ESP_LOGI(TAG, "logged weather row -> %s (%s)", path, when);
     return ESP_OK;
 }
+
+esp_err_t sdcard_current_log_path(char *path, size_t path_len)
+{
+    if (!path || path_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_mounted) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    time_t t = time(NULL);
+    if (t < 1700000000LL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    struct tm lt;
+    localtime_r(&t, &lt);
+
+    if (s_subdir) {
+        snprintf(path, path_len, SDCARD_LOG_DIR "/%04d_%02d.csv",
+                 lt.tm_year + 1900, lt.tm_mon + 1);
+    } else {
+        snprintf(path, path_len,
+                 SDCARD_MOUNT "/" SDCARD_LOG_PREFIX "%04d_%02d.csv",
+                 lt.tm_year + 1900, lt.tm_mon + 1);
+    }
+    return ESP_OK;
+}

@@ -28,6 +28,42 @@ static void mqtt_disconnect(void)
     s_connected = false;
 }
 
+#define HA_AVAIL_TOPIC  "tempest/availability"
+
+static void publish_availability(const wx_state_t *s)
+{
+    if (!s_mqtt_client || !s_connected) {
+        return;
+    }
+    bool online = s->wifi_connected && s->obs_valid && !wx_obs_is_stale(s);
+    esp_mqtt_client_publish(s_mqtt_client, HA_AVAIL_TOPIC,
+                            online ? "online" : "offline", 0, 1, 1);
+}
+
+static void ha_sensor(const char *slug, const char *name, const char *json_key,
+                      const char *dev_class, const char *unit)
+{
+    char payload[420];
+    int n = snprintf(payload, sizeof(payload),
+        "{\"name\":\"%s\",\"stat_t\":\"tempest/state\","
+        "\"avty_t\":\"%s\",\"val_tpl\":\"{{ value_json.%s }}\","
+        "\"uniq_id\":\"tempest_%s\"",
+        name, HA_AVAIL_TOPIC, json_key, slug);
+    if (dev_class && dev_class[0]) {
+        n += snprintf(payload + n, sizeof(payload) - (size_t)n,
+                      ",\"dev_cla\":\"%s\"", dev_class);
+    }
+    if (unit && unit[0]) {
+        n += snprintf(payload + n, sizeof(payload) - (size_t)n,
+                      ",\"unit_of_meas\":\"%s\"", unit);
+    }
+    snprintf(payload + n, sizeof(payload) - (size_t)n, "}");
+
+    char topic[96];
+    snprintf(topic, sizeof(topic), "homeassistant/sensor/tempest/%s/config", slug);
+    esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 1);
+}
+
 static void publish_ha_discovery(void)
 {
     if (!s_mqtt_client || !s_connected) {
@@ -36,61 +72,25 @@ static void publish_ha_discovery(void)
 
     ESP_LOGI(TAG, "publishing Home Assistant auto-discovery entities");
 
-    const char *temp_disc =
-        "{\"name\":\"Tempest Temperature\",\"stat_t\":\"tempest/state\","
-        "\"val_tpl\":\"{{ value_json.temperature }}\",\"unit_of_meas\":\"°F\","
-        "\"dev_cla\":\"temperature\",\"uniq_id\":\"tempest_temp\"}";
-    esp_mqtt_client_publish(s_mqtt_client,
-                            "homeassistant/sensor/tempest/temperature/config",
-                            temp_disc, 0, 1, 1);
+    char tu[8], wu[8], pu[16], ru[8];
+    snprintf(tu, sizeof(tu), "\xC2\xB0%s", cfg_temp_suffix());
+    snprintf(wu, sizeof(wu), " %s", cfg_wind_suffix());
+    snprintf(pu, sizeof(pu), " %s", cfg_pressure_suffix());
+    snprintf(ru, sizeof(ru), " %s", cfg_rain_suffix());
 
-    const char *hum_disc =
-        "{\"name\":\"Tempest Humidity\",\"stat_t\":\"tempest/state\","
-        "\"val_tpl\":\"{{ value_json.humidity }}\",\"unit_of_meas\":\"%\","
-        "\"dev_cla\":\"humidity\",\"uniq_id\":\"tempest_hum\"}";
-    esp_mqtt_client_publish(s_mqtt_client,
-                            "homeassistant/sensor/tempest/humidity/config",
-                            hum_disc, 0, 1, 1);
-
-    const char *press_disc =
-        "{\"name\":\"Tempest Pressure\",\"stat_t\":\"tempest/state\","
-        "\"val_tpl\":\"{{ value_json.pressure_inhg }}\",\"unit_of_meas\":\"inHg\","
-        "\"dev_cla\":\"atmospheric_pressure\",\"uniq_id\":\"tempest_press\"}";
-    esp_mqtt_client_publish(s_mqtt_client,
-                            "homeassistant/sensor/tempest/pressure/config",
-                            press_disc, 0, 1, 1);
-
-    const char *wind_disc =
-        "{\"name\":\"Tempest Wind Speed\",\"stat_t\":\"tempest/state\","
-        "\"val_tpl\":\"{{ value_json.wind_speed_mph }}\",\"unit_of_meas\":\"mph\","
-        "\"dev_cla\":\"wind_speed\",\"uniq_id\":\"tempest_wind\"}";
-    esp_mqtt_client_publish(s_mqtt_client,
-                            "homeassistant/sensor/tempest/wind/config",
-                            wind_disc, 0, 1, 1);
-
-    const char *bat_disc =
-        "{\"name\":\"Tempest Battery Voltage\",\"stat_t\":\"tempest/state\","
-        "\"val_tpl\":\"{{ value_json.battery_v }}\",\"unit_of_meas\":\"V\","
-        "\"dev_cla\":\"voltage\",\"uniq_id\":\"tempest_bat\"}";
-    esp_mqtt_client_publish(s_mqtt_client,
-                            "homeassistant/sensor/tempest/battery/config",
-                            bat_disc, 0, 1, 1);
-
-    const char *in_temp_disc =
-        "{\"name\":\"Indoor Temperature\",\"stat_t\":\"tempest/state\","
-        "\"val_tpl\":\"{{ value_json.indoor_temp_f }}\",\"unit_of_meas\":\"°F\","
-        "\"dev_cla\":\"temperature\",\"uniq_id\":\"tempest_indoor_temp\"}";
-    esp_mqtt_client_publish(s_mqtt_client,
-                            "homeassistant/sensor/tempest/indoor_temperature/config",
-                            in_temp_disc, 0, 1, 1);
-
-    const char *in_hum_disc =
-        "{\"name\":\"Indoor Humidity\",\"stat_t\":\"tempest/state\","
-        "\"val_tpl\":\"{{ value_json.indoor_humidity }}\",\"unit_of_meas\":\"%\","
-        "\"dev_cla\":\"humidity\",\"uniq_id\":\"tempest_indoor_hum\"}";
-    esp_mqtt_client_publish(s_mqtt_client,
-                            "homeassistant/sensor/tempest/indoor_humidity/config",
-                            in_hum_disc, 0, 1, 1);
+    ha_sensor("temperature", "Tempest Temperature", "temperature", "temperature", tu);
+    ha_sensor("humidity", "Tempest Humidity", "humidity", "humidity", "%");
+    ha_sensor("pressure", "Tempest Pressure", "pressure", "atmospheric_pressure", pu);
+    ha_sensor("wind", "Tempest Wind Speed", "wind_speed", "wind_speed", wu);
+    ha_sensor("wind_gust", "Tempest Wind Gust", "wind_gust", "wind_speed", wu);
+    ha_sensor("battery", "Tempest Battery Voltage", "battery_v", "voltage", "V");
+    ha_sensor("indoor_temperature", "Indoor Temperature", "indoor_temp", "temperature", tu);
+    ha_sensor("indoor_humidity", "Indoor Humidity", "indoor_humidity", "humidity", "%");
+    ha_sensor("rain_today", "Tempest Rain Today", "rain_today", "precipitation", ru);
+    ha_sensor("uv_index", "Tempest UV Index", "uv_index", NULL, NULL);
+    ha_sensor("dew_point", "Tempest Dew Point", "dew_point", "temperature", tu);
+    ha_sensor("lightning_3h", "Tempest Lightning (3h)", "lightning_3h", NULL, NULL);
+    ha_sensor("aqi", "Tempest Air Quality", "aqi", NULL, NULL);
 }
 
 static void publish_state(void)
@@ -101,26 +101,30 @@ static void publish_state(void)
 
     wx_state_t s;
     wx_snapshot(&s);
+
+    publish_availability(&s);
+
     if (!s.obs_valid) {
         return;
     }
 
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "temperature", (double)wx_c_to_f(s.air_temp_c));
+    cJSON_AddNumberToObject(root, "temperature", (double)cfg_temp(s.air_temp_c));
     cJSON_AddNumberToObject(root, "humidity", (double)s.humidity_pct);
-    cJSON_AddNumberToObject(root, "dew_point", (double)wx_c_to_f(s.dew_point_c));
-    cJSON_AddNumberToObject(root, "pressure_inhg", (double)wx_mb_to_inhg(s.pressure_mb));
-    cJSON_AddNumberToObject(root, "wind_speed_mph", (double)wx_ms_to_mph(s.wind_avg_ms));
-    cJSON_AddNumberToObject(root, "wind_gust_mph", (double)wx_ms_to_mph(s.wind_gust_ms));
+    cJSON_AddNumberToObject(root, "dew_point", (double)cfg_temp(s.dew_point_c));
+    cJSON_AddNumberToObject(root, "pressure", (double)cfg_pressure(s.pressure_mb));
+    cJSON_AddNumberToObject(root, "wind_speed", (double)cfg_wind(s.wind_avg_ms));
+    cJSON_AddNumberToObject(root, "wind_gust", (double)cfg_wind(s.wind_gust_ms));
     cJSON_AddNumberToObject(root, "wind_dir_deg", s.wind_dir_deg);
-    cJSON_AddNumberToObject(root, "rain_today_in", (double)wx_mm_to_in(s.rain_today_mm));
+    cJSON_AddNumberToObject(root, "rain_today", (double)cfg_rain(s.rain_today_mm));
     cJSON_AddNumberToObject(root, "solar_radiation_wm2", (double)s.solar_radiation_wm2);
     cJSON_AddNumberToObject(root, "uv_index", (double)s.uv_index);
+    cJSON_AddNumberToObject(root, "lightning_3h", s.strikes_3h);
     cJSON_AddNumberToObject(root, "battery_v", (double)s.battery_v);
     cJSON_AddNumberToObject(root, "hub_rssi", s.hub_rssi);
     cJSON_AddBoolToObject(root, "indoor_valid", s.indoor_valid);
     if (s.indoor_valid) {
-        cJSON_AddNumberToObject(root, "indoor_temp_f", (double)wx_c_to_f(s.indoor_temp_c));
+        cJSON_AddNumberToObject(root, "indoor_temp", (double)cfg_temp(s.indoor_temp_c));
         cJSON_AddNumberToObject(root, "indoor_humidity", (double)s.indoor_humidity_pct);
     }
     if (s.aqi_valid) {
@@ -217,7 +221,12 @@ static void mqtt_loop_task(void *arg)
         mqtt_try_connect();
 
         if (s_connected) {
-            publish_state();
+            wx_state_t snap;
+            wx_snapshot(&snap);
+            publish_availability(&snap);
+            if (snap.obs_valid) {
+                publish_state();
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(15000));
