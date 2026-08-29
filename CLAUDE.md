@@ -1,4 +1,4 @@
-# Tempest Weather Display — working notes
+# Display for Tempest Weather Station — working notes
 
 ## What this is
 

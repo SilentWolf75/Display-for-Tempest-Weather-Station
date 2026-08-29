@@ -302,3 +302,10 @@ bool graphs_is_visible(void)
 {
     return s_screen && lv_screen_active() == s_screen;
 }
+
+void graphs_request_redraw(void)
+{
+    /* Called from tempest_rest after history backfill — flag only; graphs_tick()
+     * runs on the LVGL thread. */
+    s_last_redraw = 0;
+}

@@ -1,5 +1,5 @@
 /*
- * Tempest Weather Display
+ * Display for Tempest Weather Station
  * Elecrow CrowPanel Advance 10.1" (ESP32-P4 + ESP32-C6)
  *
  * Boot order matters:
@@ -58,7 +58,7 @@ static void ui_timer_cb(lv_timer_t *timer)
 static void log_boot_banner(void)
 {
     ESP_LOGI(TAG, "----------------------------------------");
-    ESP_LOGI(TAG, "Tempest Weather Display");
+    ESP_LOGI(TAG, "Display for Tempest Weather Station");
     ESP_LOGI(TAG, "station %d, UDP port %d",
              CONFIG_TEMPEST_STATION_ID, CONFIG_TEMPEST_UDP_PORT);
     ESP_LOGI(TAG, "internal free: %u B",
@@ -77,7 +77,16 @@ static void ui_init_task(void *pvParameters)
         ui_init();
         lv_timer_create(ui_timer_cb, UI_TICK_PERIOD_MS, NULL);
         display_unlock();
+        display_refresh_now();
         ESP_LOGI(TAG, "UI initialized and display unlocked");
+
+        /* Turn on backlight smoothly now that the dark dashboard is rendered */
+        vTaskDelay(pdMS_TO_TICKS(60));
+        cfg_t c;
+        cfg_get(&c);
+        uint8_t b = c.brightness_day >= 75 ? c.brightness_day : 85;
+        display_set_brightness(b);
+        ESP_LOGI(TAG, "Backlight turned on (%u%%)", b);
     } else {
         ESP_LOGE(TAG, "CRITICAL: Failed to lock display for UI initialization!");
     }
@@ -198,6 +207,9 @@ void app_main(void)
         vTaskDelay(pdMS_TO_TICKS(30000));
 
         uint32_t count = tempest_udp_packet_count();
+        if (cfg_boot.web_server_enabled && net_is_connected() && !web_server_is_running()) {
+            web_server_start();
+        }
         ESP_LOGI(TAG, "udp packets: %lu (+%lu)  wifi: %s  heap: %u/%u",
                  (unsigned long)count,
                  (unsigned long)(count - last_count),

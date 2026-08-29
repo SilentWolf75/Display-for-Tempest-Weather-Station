@@ -47,3 +47,6 @@ void ui_note_user_activity(void);
 
 /* Rebuild forecast-strip icons after animate_forecast changes in settings. */
 void ui_forecast_mode_changed(void);
+
+/* Called when REST/Open-Meteo publishes a new forecast snapshot. */
+void ui_notify_forecast_updated(void);

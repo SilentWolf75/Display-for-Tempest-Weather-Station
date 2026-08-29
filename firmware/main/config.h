@@ -33,7 +33,7 @@ typedef struct {
     cfg_units_t units;
     uint8_t     timezone_idx;        /* 0=ET, 1=CT, 2=MT, 3=AZ, 4=PT, 5=AK, 6=HI, 7=UTC */
     uint8_t     brightness_day;      /* 5..100 */
-    uint8_t     brightness_night;    /* 0..100, 0 = backlight off */
+    uint8_t     brightness_night;    /* 5..100 */
     uint8_t     night_start_hour;    /* local hour dimming begins */
     uint8_t     night_end_hour;      /* local hour full brightness resumes */
     bool        night_dim_enabled;
@@ -55,6 +55,7 @@ typedef struct {
     uint8_t     screensaver_brightness; /* backlight % while screensaver active */
     bool        lightning_alert_sound; /* Short siren when strike within 6 mi */
     bool        lightning_alert_voice; /* Spoken proximity alert for lightning */
+    float       indoor_temp_offset_c;  /* Calibration offset for onboard PCB heat (-15..+10 C) */
 } cfg_t;
 
 esp_err_t cfg_init(void);

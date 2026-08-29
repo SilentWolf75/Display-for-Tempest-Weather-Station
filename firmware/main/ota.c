@@ -56,7 +56,7 @@ static esp_err_t root_get(httpd_req_t *req)
     char page[1400];
     int n = snprintf(page, sizeof(page),
         "<!doctype html><meta name=viewport content=\"width=device-width\">"
-        "<title>Tempest Display</title>"
+        "<title>Weather Station Display</title>"
         "<style>body{font:16px system-ui;max-width:34rem;margin:3rem auto;"
         "padding:0 1rem;background:#0b0e13;color:#e8edf2}"
         "h1{font-size:1.3rem;font-weight:500}"
@@ -67,7 +67,7 @@ static esp_err_t root_get(httpd_req_t *req)
         "button{background:#4fc3f7;border:0;color:#0b0e13;padding:.5rem 1rem;"
         "border-radius:6px;cursor:pointer}"
         "small{color:#7e8b99}</style>"
-        "<h1>Tempest Weather Display</h1>"
+        "<h1>Display for Tempest Weather Station</h1>"
         "<dl>"
         "<dt>version<dd>%s"
         "<dt>built<dd>%s %s"

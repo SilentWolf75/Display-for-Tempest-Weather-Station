@@ -17,6 +17,7 @@
 esp_err_t net_start(void);
 
 bool net_is_connected(void);
+int8_t net_get_rssi(void);
 
 /* One scanned access point. */
 typedef struct {
@@ -40,6 +41,7 @@ const char *net_current_ssid(void);
 /* True once SNTP has set a plausible wall clock. Sunrise/sunset rendering and
  * staleness checks are meaningless before this. */
 bool net_time_is_valid(void);
+void net_mark_time_valid(void);
 void net_set_timezone(int tz_idx);
 
 /* Writes the STA IPv4 address as dotted decimal. Returns false when Wi-Fi

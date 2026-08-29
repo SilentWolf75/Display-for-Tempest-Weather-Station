@@ -1,4 +1,4 @@
-# Tempest Weather Display
+# Display for Tempest Weather Station
 
 A standalone 1024x600 wall display for a WeatherFlow Tempest weather station,
 running on an Elecrow CrowPanel Advance 10.1" (ESP32-P4).
@@ -108,7 +108,7 @@ cd firmware && cp main/secrets.h.example main/secrets.h
 ```
 
 Put your Tempest personal access token in `main/secrets.h`.
-Set the Wi-Fi SSID and password under `idf.py menuconfig` -> "Tempest Weather
+Set the Wi-Fi SSID and password under `idf.py menuconfig` -> "Display for Tempest Weather
 Display", then:
 
 Note: creating `secrets.h` for the first time does **not** invalidate the build

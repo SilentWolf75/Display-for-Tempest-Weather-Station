@@ -26,3 +26,9 @@ void wx_moon_compute(int64_t epoch, wx_moon_info_t *out);
 /* True between today's moonset and moonrise (or after sunset if no schedule). */
 bool wx_is_night_sky(int64_t now, int64_t sunset_epoch,
                      int64_t moonrise_epoch, int64_t moonset_epoch);
+
+/* Astronomical real-time lunar altitude in degrees above horizon (-90 to +90) */
+float wx_moon_altitude_calc(int64_t epoch, float lat_deg, float lon_deg);
+
+/* Astronomical position fraction along the visible sky arc (0 = rising East, 0.5 = meridian South, 1 = setting West) */
+float wx_moon_sky_fraction(int64_t epoch, float lat_deg, float lon_deg);

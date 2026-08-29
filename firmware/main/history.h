@@ -56,5 +56,10 @@ bool history_get_secondary(hist_series_t series, float *out, int out_len);
 /* True once at least two buckets hold data -- below that a graph is a dot. */
 bool history_is_plottable(void);
 
+/* Wipe the ring and accept ascending backfill samples (REST history seed).
+ * Must be paired with history_end_backfill(). */
+void history_begin_backfill(void);
+void history_end_backfill(void);
+
 /* Oldest and newest bucket timestamps, for axis labels. */
 void history_span(int64_t *oldest, int64_t *newest);

@@ -17,6 +17,7 @@ esp_err_t net_start(void)
 }
 
 bool net_is_connected(void) { return false; }
+int8_t net_get_rssi(void) { return 0; }
 bool net_time_is_valid(void) { return false; }
 int net_scan(net_ap_t *out, int max_aps) { (void)out; (void)max_aps; return -1; }
 esp_err_t net_apply_credentials(const char *s, const char *p)
@@ -40,6 +41,7 @@ bool net_get_ip(char *buf, size_t len) { (void)buf; (void)len; return false; }
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
 #include "config.h"
+#include "esp_timer.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -65,10 +67,21 @@ static const char *TAG = "net";
 static EventGroupHandle_t s_events;
 static int  s_retries;
 static bool s_time_valid;
+static esp_timer_handle_t s_reconnect_timer;
 /* Set while a scan is running. The auto-reconnect below must stand down for
  * the duration: esp_wifi_connect() and a scan cannot run at once, and the
  * scan is the one that loses -- it returns zero networks. */
 static volatile bool s_scanning;
+
+static void reconnect_timer_cb(void *arg)
+{
+    (void)arg;
+    s_retries = 0;
+    if (cfg_has_wifi() && !s_scanning) {
+        ESP_LOGI(TAG, "reconnect timer: attempting Wi-Fi connection...");
+        esp_wifi_connect();
+    }
+}
 
 static void on_wifi_event(void *arg, esp_event_base_t base,
                           int32_t id, void *data)
@@ -96,16 +109,19 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
             ESP_LOGW(TAG, "disconnected, retry %d/%d", s_retries, MAX_RETRY);
             esp_wifi_connect();
         } else {
-            /* Do not give up permanently -- this is a wall display that has to
-             * come back on its own after a router reboot. Back off and keep
-             * trying, but let net_start() return so the UI can come up and say
-             * "no network" instead of hanging at a blank screen. */
-            ESP_LOGE(TAG, "connect failed %d times, backing off to 30s", MAX_RETRY);
+            /* Non-blocking back-off timer so system event loop is never blocked! */
+            ESP_LOGW(TAG, "connect failed %d times, scheduling retry in 15s", MAX_RETRY);
             xEventGroupSetBits(s_events, WIFI_FAIL_BIT);
-            vTaskDelay(pdMS_TO_TICKS(30000));
-            s_retries = 0;
-            if (cfg_has_wifi()) {
-                esp_wifi_connect();
+            if (!s_reconnect_timer) {
+                esp_timer_create_args_t t_args = {
+                    .callback = reconnect_timer_cb,
+                    .name     = "reconnect_tmr"
+                };
+                esp_timer_create(&t_args, &s_reconnect_timer);
+            }
+            if (s_reconnect_timer) {
+                esp_timer_stop(s_reconnect_timer);
+                esp_timer_start_once(s_reconnect_timer, 15000000); /* 15s */
             }
         }
     }
@@ -159,7 +175,7 @@ static void start_sntp(void)
     esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     cfg.sync_cb = on_time_sync;
     cfg.start   = true;
-    cfg.server_from_dhcp = true;
+    cfg.server_from_dhcp = false;   /* DHCP NTP is off; pool.ntp.org only */
     esp_netif_sntp_init(&cfg);
 
     cfg_t c;
@@ -252,13 +268,18 @@ bool net_time_is_valid(void)
     return s_time_valid;
 }
 
+void net_mark_time_valid(void)
+{
+    s_time_valid = true;
+}
+
 const char *net_current_ssid(void)
 {
     static char ssid[CFG_SSID_LEN];
     cfg_t c;
     cfg_get(&c);
     strncpy(ssid, c.wifi_ssid, sizeof(ssid) - 1);
-    ssid[sizeof(ssid) - 1] = ' ';
+    ssid[sizeof(ssid) - 1] = '\0';
     return ssid;
 }
 
@@ -304,7 +325,7 @@ int net_scan(net_ap_t *out, int max_aps)
 
     int written = 0;
     for (int i = 0; i < n && written < max_aps; i++) {
-        if (recs[i].ssid[0] == ' ') {
+        if (recs[i].ssid[0] == '\0') {
             continue;               /* hidden network */
         }
         /* The scan returns one record per BSSID, so a mesh or an extender
@@ -324,7 +345,7 @@ int net_scan(net_ap_t *out, int max_aps)
         }
         strncpy(out[written].ssid, (const char *)recs[i].ssid,
                 sizeof(out[written].ssid) - 1);
-        out[written].ssid[sizeof(out[written].ssid) - 1] = ' ';
+        out[written].ssid[sizeof(out[written].ssid) - 1] = '\0';
         out[written].rssi   = recs[i].rssi;
         out[written].secure = (recs[i].authmode != WIFI_AUTH_OPEN);
         written++;
@@ -365,7 +386,7 @@ bool net_get_ip(char *buf, size_t len)
 
 esp_err_t net_apply_credentials(const char *ssid, const char *password)
 {
-    if (!ssid || ssid[0] == ' ') {
+    if (!ssid || ssid[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
     cfg_set_wifi(ssid, password);
@@ -387,6 +408,18 @@ esp_err_t net_apply_credentials(const char *ssid, const char *password)
     }
     ESP_LOGI(TAG, "reconnecting to %s", ssid);
     return esp_wifi_connect();
+}
+
+int8_t net_get_rssi(void)
+{
+    if (!net_is_connected()) {
+        return 0;
+    }
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        return ap.rssi;
+    }
+    return 0;
 }
 
 #endif /* CONFIG_TEMPEST_NETWORK_ENABLED */

@@ -1,5 +1,7 @@
 #include "tempest_udp.h"
 #include "wx_state.h"
+#include "net.h"
+#include "tempest_rest.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -84,6 +86,8 @@ static void handle_obs_st(const cJSON *root)
         if (cur < 1700000000LL) {
             struct timeval tv = { .tv_sec = (time_t)p.obs_epoch, .tv_usec = 0 };
             settimeofday(&tv, NULL);
+            net_mark_time_valid();
+            tempest_rest_on_clock_sync();
             ESP_LOGI(TAG, "clock synced from Tempest packet: epoch %lld", (long long)p.obs_epoch);
         }
     }

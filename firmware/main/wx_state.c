@@ -12,6 +12,8 @@
 
 static const char *TAG = "wx_state";
 
+void ui_notify_forecast_updated(void);
+
 static wx_state_t        s_state;
 static SemaphoreHandle_t s_lock;
 
@@ -327,6 +329,8 @@ void wx_update_forecast(const wx_state_t *p)
     s_state.forecast_fetched_epoch  = (int64_t)time(NULL);
     s_state.forecast_valid          = true;
     UNLOCK();
+
+    ui_notify_forecast_updated();
 }
 
 void wx_update_hourly(const wx_hourly_slot_t *slots, int count)
@@ -427,7 +431,7 @@ bool wx_udp_is_stale(const wx_state_t *s)
 
 bool wx_forecast_is_stale(const wx_state_t *s)
 {
-    if (!s->forecast_valid || s->forecast_days <= 0) {
+    if (s->forecast_days <= 0) {
         return true;
     }
     if (s->forecast_fetched_epoch <= 0) {

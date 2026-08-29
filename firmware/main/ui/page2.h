@@ -1,7 +1,7 @@
 #pragma once
 /*
- * Second screen: moon/night mode, lightning proximity, rain periods,
- * hourly timeline, and AQI detail.
+ * Second screen: lunar arc / moon phase and 24-hour hourly timeline.
+ * Night standby overlay is still owned here.
  */
 
 #include "esp_err.h"

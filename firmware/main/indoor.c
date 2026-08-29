@@ -1,4 +1,5 @@
 #include "indoor.h"
+#include "config.h"
 #include "board_pins.h"
 #include "display.h"
 #include "wx_state.h"
@@ -15,9 +16,13 @@ static const char *TAG = "indoor";
 #define AHT20_ADDR      0x38
 #define SHT4X_ADDR      0x44
 
-#define TASK_STACK      3072
+#define TASK_STACK      8192
 #define TASK_PRIO       3
 #define PROBE_TIMEOUT   100
+
+#ifndef CONFIG_INDOOR_POLL_INTERVAL_S
+#define CONFIG_INDOOR_POLL_INTERVAL_S 10
+#endif
 
 static i2c_master_dev_handle_t s_dev;
 static indoor_sensor_t         s_type;
@@ -172,15 +177,24 @@ static void indoor_task(void *arg)
                       : sht4x_read(&t, &h);
 
         if (err == ESP_OK) {
+            cfg_t cfg;
+            cfg_get(&cfg);
+            float t_cal = t + cfg.indoor_temp_offset_c;
+
             /* Sanity gate */
-            if (t > -20.0f && t < 70.0f && h >= 0.0f && h <= 100.0f) {
+            if (t_cal > -20.0f && t_cal < 70.0f && h >= 0.0f && h <= 100.0f) {
                 wx_state_t p = {0};
-                p.indoor_temp_c       = t;
+                p.indoor_temp_c       = t_cal;
                 p.indoor_humidity_pct = h;
                 wx_update_indoor(&p);
+                ESP_LOGI(TAG, "Indoor sensor: raw %.1fF -> cal %.1fF (offset %+.1fF), hum %.0f%%",
+                         (double)(t * 1.8f + 32.0f),
+                         (double)(t_cal * 1.8f + 32.0f),
+                         (double)(cfg.indoor_temp_offset_c * 1.8f),
+                         (double)h);
             } else {
-                ESP_LOGW(TAG, "implausible reading %.1fC %.0f%%, ignoring",
-                         (double)t, (double)h);
+                ESP_LOGW(TAG, "implausible reading %.1fC (raw %.1fC) %.0f%%, ignoring",
+                         (double)t_cal, (double)t, (double)h);
             }
         } else {
             ESP_LOGW(TAG, "read failed: %s; will re-probe", esp_err_to_name(err));

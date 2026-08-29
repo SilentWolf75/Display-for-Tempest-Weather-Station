@@ -623,6 +623,19 @@ static void on_scan(lv_event_t *e)
     start_scan();
 }
 
+typedef struct {
+    char ssid[64];
+    char pass[64];
+} connect_req_t;
+
+static void connect_worker_task(void *pv)
+{
+    connect_req_t *req = (connect_req_t *)pv;
+    net_apply_credentials(req->ssid, req->pass);
+    free(req);
+    vTaskDelete(NULL);
+}
+
 static void on_connect(lv_event_t *e)
 {
     (void)e;
@@ -639,19 +652,21 @@ static void on_connect(lv_event_t *e)
         return;
     }
 
-    esp_err_t err = net_apply_credentials(s_chosen_ssid,
-                                          s_chosen_open ? "" : pass);
-    if (err == ESP_OK) {
-        s_connecting = true;
-        s_connect_deadline = (int64_t)time(NULL) + CONNECT_WAIT_S;
-        lv_label_set_text_fmt(s_status, "connecting to %s...", s_chosen_ssid);
-        lv_obj_set_style_text_color(s_status, COL_FOCUS, 0);
-        set_connect_enabled(false);
-        lv_obj_add_state(s_connect_btn, LV_STATE_DISABLED);
-    } else {
-        set_status("could not apply credentials", COL_ALERT);
-        ESP_LOGE(TAG, "net_apply_credentials: %s", esp_err_to_name(err));
+    connect_req_t *req = calloc(1, sizeof(connect_req_t));
+    if (req) {
+        strncpy(req->ssid, s_chosen_ssid, sizeof(req->ssid) - 1);
+        if (!s_chosen_open && pass) {
+            strncpy(req->pass, pass, sizeof(req->pass) - 1);
+        }
+        xTaskCreate(connect_worker_task, "wifi_conn", 6144, req, 4, NULL);
     }
+
+    s_connecting = true;
+    s_connect_deadline = (int64_t)time(NULL) + CONNECT_WAIT_S;
+    lv_label_set_text_fmt(s_status, "connecting to %s...", s_chosen_ssid);
+    lv_obj_set_style_text_color(s_status, COL_FOCUS, 0);
+    set_connect_enabled(false);
+    lv_obj_add_state(s_connect_btn, LV_STATE_DISABLED);
 }
 
 static void on_kb_ready(lv_event_t *e)

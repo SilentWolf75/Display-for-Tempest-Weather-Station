@@ -27,6 +27,9 @@ void display_unlock(void);
 /* 0-100. No-op until the backlight pin in board_pins.h is verified. */
 void display_set_brightness(int percent);
 
+/* Invalidate the active screen and poke the LVGL task to flush now. */
+void display_refresh_now(void);
+
 /* The I2C bus the touch controller sits on. Shared with the Grove header,
  * so the indoor sensor attaches to this rather than creating a second
  * master on the same two pins. NULL if display_init() has not run or the

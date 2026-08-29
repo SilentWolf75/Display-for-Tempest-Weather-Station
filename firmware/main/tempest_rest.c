@@ -3,6 +3,7 @@
 #include "tempest_rest.h"
 #include "wx_state.h"
 #include "history.h"
+#include "graphs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,7 +45,7 @@ static const char *TAG = "tempest_rest";
 
 /* Metric on the wire so wx_state stays SI; the UI converts for display. */
 #define FORECAST_URL_FMT \
-    "http://swd.weatherflow.com/swd/rest/better_forecast" \
+    "https://swd.weatherflow.com/swd/rest/better_forecast" \
     "?station_id=%d&units_temp=c&units_wind=mps&units_pressure=mb" \
     "&units_precip=mm&units_distance=km&token=%s"
 
@@ -152,6 +153,15 @@ static esp_err_t parse_forecast(const char *json, int len)
         return ESP_FAIL;
     }
 
+    if (p.current_conditions[0] == '\0' && p.forecast[0].conditions[0]) {
+        strncpy(p.current_conditions, p.forecast[0].conditions,
+                sizeof(p.current_conditions) - 1);
+    }
+    if (p.current_icon[0] == '\0' && p.forecast[0].icon[0]) {
+        strncpy(p.current_icon, p.forecast[0].icon,
+                sizeof(p.current_icon) - 1);
+    }
+
     wx_update_forecast(&p);
     ESP_LOGI(TAG, "forecast updated: %d days, now '%s'",
              p.forecast_days, p.current_conditions);
@@ -184,7 +194,7 @@ static const char *wmo_to_icon(int code)
     case 0: return "clear-day";
     case 1: case 2: return "partly-cloudy-day";
     case 3: return "cloudy";
-    case 45: case 48: return "fog";
+    case 45: case 48: return "foggy";
     case 51: case 53: case 55:
     case 56: case 57:
     case 61: case 63: case 65:
@@ -555,10 +565,11 @@ static esp_err_t fetch_open_meteo_extras(const char *zipcode, float lat, float l
         }
 
         if (cJSON_IsArray(mr_arr) && cJSON_GetArraySize(mr_arr) > 0) {
-            cJSON *mr = cJSON_GetArrayItem(mr_arr, cJSON_GetArraySize(mr_arr) - 1);
-            cJSON *ms = ms_arr ? cJSON_GetArrayItem(ms_arr, cJSON_GetArraySize(ms_arr) - 1) : NULL;
-            int64_t rise = (mr && cJSON_IsString(mr)) ? (int64_t)parse_iso_time(mr->valuestring) : 0;
-            int64_t set  = (ms && cJSON_IsString(ms)) ? (int64_t)parse_iso_time(ms->valuestring) : 0;
+            /* Open-Meteo daily arrays: index 0 is today, index 1 is tomorrow */
+            cJSON *mr0 = cJSON_GetArrayItem(mr_arr, 0);
+            cJSON *ms0 = ms_arr ? cJSON_GetArrayItem(ms_arr, 0) : NULL;
+            int64_t rise = (mr0 && cJSON_IsString(mr0)) ? (int64_t)parse_iso_time(mr0->valuestring) : 0;
+            int64_t set  = (ms0 && cJSON_IsString(ms0)) ? (int64_t)parse_iso_time(ms0->valuestring) : 0;
             wx_update_moon_schedule(rise, set);
         }
     }
@@ -632,6 +643,33 @@ esp_err_t tempest_rest_fetch_now(void)
  * -------------------------------------------------------------------------- */
 
 static int s_device_id;     /* 0 until discovered */
+static bool s_history_backfilled;
+
+static bool clock_is_plausible(void)
+{
+    return time(NULL) > 1700000000LL;
+}
+
+static bool wait_for_plausible_clock(int max_wait_s)
+{
+    for (int i = 0; i < max_wait_s; i++) {
+        if (clock_is_plausible()) {
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    return clock_is_plausible();
+}
+
+static void try_history_backfill(void)
+{
+    if (s_history_backfilled || !clock_is_plausible()) {
+        return;
+    }
+    if (tempest_rest_backfill_history() == ESP_OK) {
+        s_history_backfilled = true;
+    }
+}
 
 /* Generic GET into a caller-owned buffer. Returns byte count, or negative. */
 static int rest_get(const char *url, char *buf, int cap)
@@ -771,6 +809,8 @@ esp_err_t tempest_rest_backfill_history(void)
         return ESP_FAIL;
     }
 
+    history_begin_backfill();
+
     char *url = malloc(512);
     char *buf = heap_caps_malloc(BACKFILL_BUF_BYTES, MALLOC_CAP_SPIRAM);
     if (!url || !buf) {
@@ -809,11 +849,14 @@ esp_err_t tempest_rest_backfill_history(void)
     free(url);
     free(buf);
 
+    history_end_backfill();
+
     if (total == 0) {
         ESP_LOGW(TAG, "backfill returned no observations");
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "backfilled %d observations into the trend graphs", total);
+    graphs_request_redraw();
     return ESP_OK;
 }
 
@@ -826,19 +869,36 @@ static void rest_task(void *arg)
     }
     vTaskDelay(pdMS_TO_TICKS(2000));
 
-    /* 1. Fetch 7-day Better Forecast first so screen updates immediately */
-    esp_err_t err = tempest_rest_fetch_now();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "initial forecast fetch failed, retrying in 15s");
+    esp_err_t err = ESP_FAIL;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        err = tempest_rest_fetch_now();
+        if (err == ESP_OK) {
+            break;
+        }
+        ESP_LOGW(TAG, "forecast fetch failed, retry %d/3 in 15s", attempt + 1);
+        vTaskDelay(pdMS_TO_TICKS(15000));
     }
 
-    /* 2. Then backfill history for trend graphs */
-    tempest_rest_backfill_history();
+    /* History backfill keys off wall-clock windows. SNTP often loses the
+     * race to the first UDP obs_st on this board, so keep trying until the
+     * clock is trustworthy or we give up for this boot cycle. */
+    if (wait_for_plausible_clock(45)) {
+        try_history_backfill();
+    } else {
+        ESP_LOGW(TAG, "clock unsynced; history backfill deferred");
+    }
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(CONFIG_TEMPEST_FORECAST_INTERVAL_S * 1000));
-        tempest_rest_fetch_now();
+        if (tempest_rest_fetch_now() == ESP_OK) {
+            try_history_backfill();
+        }
     }
+}
+
+void tempest_rest_on_clock_sync(void)
+{
+    try_history_backfill();
 }
 
 esp_err_t tempest_rest_start(void)

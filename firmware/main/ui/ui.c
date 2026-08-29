@@ -62,10 +62,13 @@ static const char *TAG = "ui";
 #define COL_OK          lv_color_hex(0x00E676)
 #define COL_IDLE        lv_color_hex(0x475569)
 
-#define COL_AQI_GOOD    lv_color_hex(0x4CAF50)
-#define COL_AQI_MOD     lv_color_hex(0xFDD835)
-#define COL_AQI_USG     lv_color_hex(0xFB8C00)
-#define COL_AQI_BAD     lv_color_hex(0xE53935)
+#define SIG_BARS        5
+#define COL_SIG_DIM     lv_color_hex(0x334155)
+#define COL_SIG_1       lv_color_hex(0xE53935) /* Red */
+#define COL_SIG_2       lv_color_hex(0xFB8C00) /* Orange */
+#define COL_SIG_3       lv_color_hex(0xFDD835) /* Yellow / Amber */
+#define COL_SIG_4       lv_color_hex(0x84CC16) /* Lime / Light Green */
+#define COL_SIG_5       lv_color_hex(0x22C55E) /* Vivid Green */
 
 #define LIGHTNING_NEAR_KM  9.656f   /* 6 miles */
 
@@ -98,6 +101,7 @@ static const char *TAG = "ui";
 #define FC_Y            440
 #define FC_H            152
 #define FC_COLS         WX_FORECAST_DAYS
+#define FC_INSET        8    /* keep col 0 off the panel's left clip edge */
 
 /* Arc Geometry */
 #define ARC_START       135
@@ -122,17 +126,18 @@ static const char *TAG = "ui";
 /* ---- widget handles ----------------------------------------------------- */
 
 /* Header */
-static lv_obj_t *hdr_dot, *hdr_station, *hdr_health, *hdr_date, *hdr_clock, *hdr_bat_icon;
+static lv_obj_t *hdr_dot, *hdr_health, *hdr_date, *hdr_clock, *hdr_bat_icon;
 static lv_obj_t *s_main_screen;
 static ui_page_t s_current_page = UI_PAGE_DASHBOARD;
 static bool       s_ui_ready;
 static lv_obj_t *hdr_page_lbl;
-static lv_obj_t *hdr_aqi_dot, *hdr_aqi_lbl;
+static lv_obj_t *hdr_signal;
+static lv_obj_t *hdr_sig_bars[SIG_BARS];
 static lv_obj_t *s_alert_banner, *s_alert_banner_lbl;
 
 /* Zone 1: Outdoor Temperature */
-static lv_obj_t *temp_val, *temp_feels_pill, *temp_dew_pill, *temp_hilo_lbl;
-static lv_obj_t *temp_knob, *temp_lo_knob, *temp_hi_knob;
+static lv_obj_t *temp_ring;
+static lv_obj_t *temp_val, *temp_stats_lbl;
 
 /* Zone 2: Split Wind Radar & Speed */
 static lv_obj_t *wind_val, *wind_unit, *wind_dir_deg, *wind_gust_lbl, *wind_avg_lbl;
@@ -150,7 +155,7 @@ static lv_obj_t *in_comfort_badge, *in_status_lbl, *in_no_sensor_view;
 static lv_obj_t *in_temp_cap, *in_hum_cap;
 
 /* Zone 4: Current Conditions */
-static lv_obj_t *cond_icon, *cond_title, *cond_sub, *cond_badge, *smart_pill;
+static lv_obj_t *cond_icon, *cond_title, *cond_sub, *cond_badge;
 
 /* Mid 1: Rain & Precipitation */
 static lv_obj_t *rain_val, *rain_rate_lbl, *rain_cylinder_fill, *rain_badge;
@@ -176,17 +181,128 @@ typedef struct {
     lv_obj_t *hi;
     lv_obj_t *lo;
     lv_obj_t *pop;
-    lv_obj_t *bar_bg;
-    lv_obj_t *bar_fill;
-    lv_obj_t *bar_dot;
 } fc_col_t;
 
 static fc_col_t fc[FC_COLS];
-static bool     s_fc_lottie;
-static bool     s_fc_rebuild;
+static lv_obj_t *s_forecast_panel;
+static bool     s_forecast_dirty;
+static char     s_fc_icon_slug[FC_COLS][32];
 
-static void rebuild_forecast_icons(void);
 static void fc_set_icon(int idx, const char *slug);
+static void set_text(lv_obj_t *l, const char *fmt, ...);
+
+/* REST forecast fields; falls back to day 0 of the 7-day strip. */
+static const char *resolve_conditions(const wx_state_t *s)
+{
+    if (s->current_conditions[0]) {
+        return s->current_conditions;
+    }
+    if (s->forecast_days > 0 && s->forecast[0].conditions[0]) {
+        return s->forecast[0].conditions;
+    }
+    return NULL;
+}
+
+static bool wx_is_night(const wx_state_t *s, int64_t now)
+{
+    if (s->sunrise_epoch > 0 && s->sunset_epoch > 0) {
+        return now < s->sunrise_epoch || now >= s->sunset_epoch;
+    }
+    struct tm lt;
+    time_t t = (time_t)now;
+    localtime_r(&t, &lt);
+    return lt.tm_hour < 6 || lt.tm_hour >= 20;
+}
+
+/* Meteocons ships separate day/night assets; Open-Meteo always emits -day. */
+static void slug_for_time_of_day(const char *slug, bool night, char *out, size_t out_len)
+{
+    if (!slug || !slug[0]) {
+        strncpy(out, night ? "clear-night" : "clear-day", out_len - 1);
+        out[out_len - 1] = '\0';
+        return;
+    }
+
+    if (night) {
+        if (strcmp(slug, "clear-day") == 0) {
+            strncpy(out, "clear-night", out_len - 1);
+            return;
+        }
+        const char *day = strstr(slug, "-day");
+        if (day && day[4] == '\0') {
+            size_t prefix = (size_t)(day - slug);
+            snprintf(out, out_len, "%.*s-night", (int)prefix, slug);
+            return;
+        }
+    } else {
+        if (strcmp(slug, "clear-night") == 0 || strcmp(slug, "starry-night") == 0) {
+            strncpy(out, "clear-day", out_len - 1);
+            return;
+        }
+        const char *night_suffix = strstr(slug, "-night");
+        if (night_suffix && night_suffix[6] == '\0') {
+            size_t prefix = (size_t)(night_suffix - slug);
+            snprintf(out, out_len, "%.*s-day", (int)prefix, slug);
+            return;
+        }
+    }
+
+    strncpy(out, slug, out_len - 1);
+    out[out_len - 1] = '\0';
+}
+
+static const char *resolve_icon_slug(const wx_state_t *s, int64_t now)
+{
+    static char buf[WX_COND_STR_LEN];
+    bool night = wx_is_night(s, now);
+    const char *base = NULL;
+
+    /* Live sensor overrides beat forecast slugs. */
+    if (s->obs_valid) {
+        if (s->rain_rate_mm_hr > 0.05f) {
+            base = "rainy";
+        } else if (s->strikes_3h > 0) {
+            base = night ? "possibly-thunderstorm-night" : "possibly-thunderstorm-day";
+        }
+    }
+
+    if (!base && s->current_icon[0]) {
+        base = s->current_icon;
+    } else if (!base && s->forecast_days > 0 && s->forecast[0].icon[0]) {
+        base = s->forecast[0].icon;
+    } else {
+        base = night ? "clear-night" : "clear-day";
+    }
+
+    slug_for_time_of_day(base, night, buf, sizeof(buf));
+    return buf;
+}
+
+static void update_conditions_card(const wx_state_t *s, int64_t now)
+{
+    const char *cond = resolve_conditions(s);
+    if (cond) {
+        lv_label_set_text(cond_title, cond);
+    } else if (s->forecast_days > 0) {
+        lv_label_set_text(cond_title, "Forecast ready");
+    } else {
+        lv_label_set_text(cond_title, "—");
+    }
+
+    if (cond_icon) {
+        wx_icon_set(cond_icon, resolve_icon_slug(s, now));
+    }
+
+    if (s->forecast_days > 0) {
+        float f_hi = U_TEMP(s->forecast[0].air_temp_high_c);
+        float f_lo = U_TEMP(s->forecast[0].air_temp_low_c);
+        set_text(cond_sub, "Today: Hi %.0f°  Lo %.0f°", (double)f_hi, (double)f_lo);
+    } else if (s->daily_valid && s->obs_valid) {
+        float t_hi = U_TEMP(s->temp_high_today_c);
+        float t_lo = U_TEMP(s->temp_low_today_c);
+        set_text(cond_sub, "Today: Hi %.0f°  Lo %.0f°", (double)t_hi, (double)t_lo);
+    }
+}
 
 static void on_gear(lv_event_t *e);
 static void on_page_btn(lv_event_t *e);
@@ -194,12 +310,26 @@ static void on_toggle_units(lv_event_t *e);
 static void on_screen_swipe(lv_event_t *e);
 static void ui_sync_page_button_labels(void);
 
-static lv_color_t aqi_color(int aqi)
+static int rssi_to_bars(int rssi)
 {
-    if (aqi <= 50)  return COL_AQI_GOOD;
-    if (aqi <= 100) return COL_AQI_MOD;
-    if (aqi <= 150) return COL_AQI_USG;
-    return COL_AQI_BAD;
+    if (rssi == 0 || rssi < -95) return 0;
+    if (rssi >= -55) return 5;  /* Excellent */
+    if (rssi >= -65) return 4;  /* Very Good */
+    if (rssi >= -75) return 3;  /* Good */
+    if (rssi >= -85) return 2;  /* Fair */
+    return 1;                   /* Weak */
+}
+
+static lv_color_t sig_bar_color(int idx)
+{
+    switch (idx) {
+    case 0: return COL_SIG_1;
+    case 1: return COL_SIG_2;
+    case 2: return COL_SIG_3;
+    case 3: return COL_SIG_4;
+    case 4: return COL_SIG_5;
+    default: return COL_SIG_DIM;
+    }
 }
 
 static void format_hour_label(char *buf, size_t len, int64_t epoch)
@@ -225,6 +355,9 @@ static uint32_t   s_last_input_ms;
 static bool       s_screensaver_active;
 static int64_t    s_ltg_sound_epoch;
 static uint8_t    s_scheduled_brightness;
+static uint32_t   s_boot_ms;
+
+#define BOOT_BRIGHT_GRACE_MS  90000
 
 void ui_note_user_activity(void)
 {
@@ -500,23 +633,63 @@ static void place_knob_r(lv_obj_t *k, int cx, int cy, float frac, int radius, in
     lv_obj_set_pos(k, kx, ky);
 }
 
-static void make_graded_segments(lv_obj_t *parent, int cx, int cy, int size, int width, const lv_color_t *colors, int n_segs)
+static lv_obj_t *make_temp_ring(lv_obj_t *parent, int cx, int cy, int size, int width)
 {
-    float seg_angle = (float)ARC_SWEEP / (float)n_segs;
-    for (int i = 0; i < n_segs; i++) {
-        lv_obj_t *a = lv_arc_create(parent);
-        lv_obj_set_size(a, size, size);
-        lv_obj_set_pos(a, cx - size / 2, cy - size / 2);
-        int a_start = (int)((float)ARC_START + (float)i * seg_angle);
-        int a_end   = (int)((float)ARC_START + (float)(i + 1) * seg_angle);
-        lv_arc_set_bg_angles(a, a_start, a_end);
-        lv_obj_set_style_arc_width(a, width, LV_PART_MAIN);
-        lv_obj_set_style_arc_color(a, colors[i], LV_PART_MAIN);
-        lv_obj_set_style_arc_rounded(a, (i == 0 || i == n_segs - 1), LV_PART_MAIN);
-        lv_obj_remove_style(a, NULL, LV_PART_KNOB);
-        lv_obj_remove_style(a, NULL, LV_PART_INDICATOR);
-        lv_obj_clear_flag(a, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *a = lv_arc_create(parent);
+    lv_obj_set_size(a, size, size);
+    lv_obj_set_pos(a, cx - size / 2, cy - size / 2);
+    lv_arc_set_bg_angles(a, 0, 360);
+    lv_arc_set_rotation(a, 270);
+    lv_obj_set_style_arc_width(a, width, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(a, COL_TRACK, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(a, true, LV_PART_MAIN);
+    lv_obj_remove_style(a, NULL, LV_PART_INDICATOR);
+    lv_obj_remove_style(a, NULL, LV_PART_KNOB);
+    lv_obj_clear_flag(a, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    return a;
+}
+
+typedef struct {
+    float    temp_f;
+    uint32_t rgb;
+} temp_color_stop_t;
+
+/* Weather-Underground-style scale from temperature-color-scale.html (°F anchors). */
+static const temp_color_stop_t TEMP_COLOR_STOPS[] = {
+    { -20.f, 0x5B3FD3 }, { -10.f, 0x3B5CCC }, {   0.f, 0x2F80ED },
+    {  20.f, 0x25B7D3 }, {  32.f, 0x2CB67D }, {  50.f, 0x63B34E },
+    {  65.f, 0xB6C936 }, {  75.f, 0xF2C94C }, {  85.f, 0xF2994A },
+    {  95.f, 0xEB5757 }, { 105.f, 0xC93C64 }, { 120.f, 0x8E1B4B },
+};
+
+static lv_color_t temp_color_at_f(float temp_f)
+{
+    const int n = (int)(sizeof(TEMP_COLOR_STOPS) / sizeof(TEMP_COLOR_STOPS[0]));
+    if (temp_f <= TEMP_COLOR_STOPS[0].temp_f) {
+        return lv_color_hex(TEMP_COLOR_STOPS[0].rgb);
     }
+    if (temp_f >= TEMP_COLOR_STOPS[n - 1].temp_f) {
+        return lv_color_hex(TEMP_COLOR_STOPS[n - 1].rgb);
+    }
+    for (int i = 1; i < n; i++) {
+        if (temp_f <= TEMP_COLOR_STOPS[i].temp_f) {
+            float t0 = TEMP_COLOR_STOPS[i - 1].temp_f;
+            float t1 = TEMP_COLOR_STOPS[i].temp_f;
+            float mix = (temp_f - t0) / (t1 - t0);
+            uint32_t c0 = TEMP_COLOR_STOPS[i - 1].rgb;
+            uint32_t c1 = TEMP_COLOR_STOPS[i].rgb;
+            int r = (int)((float)((c0 >> 16) & 0xFF) + mix * (float)(((c1 >> 16) & 0xFF) - ((c0 >> 16) & 0xFF)));
+            int g = (int)((float)((c0 >> 8) & 0xFF) + mix * (float)(((c1 >> 8) & 0xFF) - ((c0 >> 8) & 0xFF)));
+            int b = (int)((float)(c0 & 0xFF) + mix * (float)((c1 & 0xFF) - (c0 & 0xFF)));
+            return lv_color_make((uint8_t)r, (uint8_t)g, (uint8_t)b);
+        }
+    }
+    return lv_color_hex(TEMP_COLOR_STOPS[n / 2].rgb);
+}
+
+static lv_color_t temp_color_at_c(float temp_c)
+{
+    return temp_color_at_f(temp_c * 9.0f / 5.0f + 32.0f);
 }
 
 static lv_obj_t *make_arc_ring(lv_obj_t *parent, int cx, int cy, int size, int width, lv_color_t track_col, lv_color_t ind_col, bool is_full)
@@ -581,39 +754,43 @@ static void build_header(lv_obj_t *scr)
     lv_obj_t *h = make_card(scr, PAD, HEAD_Y, SCR_W - 2 * PAD, HEAD_H, COL_CARD_BORDER, COL_WIND_NEON);
     card_no_accent(h);
 
-    /* Left: Live Connection & Station Status */
+    /* Left: live link indicator (dot only — no vendor branding) */
     hdr_dot = lv_obj_create(h);
-    lv_obj_set_size(hdr_dot, 8, 8);
+    lv_obj_set_size(hdr_dot, 10, 10);
     lv_obj_set_style_radius(hdr_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(hdr_dot, COL_IDLE, 0);
     lv_obj_set_style_bg_opa(hdr_dot, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(hdr_dot, 0, 0);
     lv_obj_set_style_pad_all(hdr_dot, 0, 0);
     lv_obj_clear_flag(hdr_dot, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(hdr_dot, LV_ALIGN_LEFT_MID, 6, 0);
+    lv_obj_align(hdr_dot, LV_ALIGN_LEFT_MID, 8, 0);
 
-    hdr_station = label(h, &lv_font_montserrat_14, COL_TEXT, "TEMPEST PRO");
-    lv_obj_align(hdr_station, LV_ALIGN_LEFT_MID, 22, 0);
+    /* Hub link strength — ascending bars, color-graded like a phone signal icon */
+    hdr_signal = lv_obj_create(h);
+    lv_obj_set_size(hdr_signal, 26, 18);
+    lv_obj_set_style_bg_opa(hdr_signal, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(hdr_signal, 0, 0);
+    lv_obj_set_style_pad_all(hdr_signal, 0, 0);
+    lv_obj_clear_flag(hdr_signal, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(hdr_signal, LV_ALIGN_LEFT_MID, 24, 0);
 
-    hdr_aqi_dot = lv_obj_create(h);
-    lv_obj_set_size(hdr_aqi_dot, 8, 8);
-    lv_obj_set_style_radius(hdr_aqi_dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(hdr_aqi_dot, COL_AQI_GOOD, 0);
-    lv_obj_set_style_bg_opa(hdr_aqi_dot, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(hdr_aqi_dot, 0, 0);
-    lv_obj_clear_flag(hdr_aqi_dot, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(hdr_aqi_dot, LV_ALIGN_LEFT_MID, 132, 0);
-    lv_obj_add_flag(hdr_aqi_dot, LV_OBJ_FLAG_HIDDEN);
-
-    hdr_aqi_lbl = label(h, &lv_font_montserrat_14, COL_DIM, "AQI --");
-    lv_obj_align(hdr_aqi_lbl, LV_ALIGN_LEFT_MID, 144, 0);
-    lv_obj_add_flag(hdr_aqi_lbl, LV_OBJ_FLAG_HIDDEN);
+    static const int bar_h[SIG_BARS] = {4, 7, 10, 13, 16};
+    for (int i = 0; i < SIG_BARS; i++) {
+        hdr_sig_bars[i] = lv_obj_create(hdr_signal);
+        lv_obj_set_size(hdr_sig_bars[i], 3, bar_h[i]);
+        lv_obj_set_style_radius(hdr_sig_bars[i], 1, 0);
+        lv_obj_set_style_bg_color(hdr_sig_bars[i], COL_SIG_DIM, 0);
+        lv_obj_set_style_bg_opa(hdr_sig_bars[i], LV_OPA_40, 0);
+        lv_obj_set_style_border_width(hdr_sig_bars[i], 0, 0);
+        lv_obj_clear_flag(hdr_sig_bars[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_align(hdr_sig_bars[i], LV_ALIGN_BOTTOM_LEFT, i * 5, 0);
+    }
 
     hdr_bat_icon = label(h, &lv_font_montserrat_14, COL_OK, LV_SYMBOL_BATTERY_FULL);
-    lv_obj_align(hdr_bat_icon, LV_ALIGN_LEFT_MID, 204, 0);
+    lv_obj_align(hdr_bat_icon, LV_ALIGN_LEFT_MID, 54, 0);
 
-    hdr_health = label(h, &lv_font_montserrat_14, COL_DIM, "BAT 2.75V  RSSI -45 dBm");
-    lv_obj_align(hdr_health, LV_ALIGN_LEFT_MID, 226, 0);
+    hdr_health = label(h, &lv_font_montserrat_14, COL_DIM, "BAT 2.75V");
+    lv_obj_align(hdr_health, LV_ALIGN_LEFT_MID, 76, 0);
 
     /* Center: Date */
     hdr_date = label(h, &lv_font_montserrat_16, COL_DIM, "");
@@ -679,37 +856,17 @@ static void build_top_deck(lv_obj_t *scr)
     lv_obj_align(t1, LV_ALIGN_TOP_LEFT, 6, 2);
 
     const int z1_cx = Z1_W / 2;
-    const int z1_cy = 92;
-    const int z1_box = 144;
-    const int z1_r = 65;
+    const int z1_cy = 106;
+    const int z1_ring = 168;
+    const int z1_stroke = 9;
 
-    lv_color_t grade[5] = {
-        lv_color_hex(0x00B0FF), /* Ice Blue */
-        lv_color_hex(0x00E676), /* Emerald  */
-        lv_color_hex(0xFFD600), /* Yellow   */
-        lv_color_hex(0xFF9800), /* Orange   */
-        lv_color_hex(0xFF1744)  /* Crimson  */
-    };
-    make_graded_segments(z1, z1_cx, z1_cy, z1_box, 12, grade, 5);
+    temp_ring = make_temp_ring(z1, z1_cx, z1_cy, z1_ring, z1_stroke);
 
-    temp_lo_knob = make_knob(z1, COL_TEMP_COLD, 10);
-    temp_hi_knob = make_knob(z1, COL_TEMP_HOT, 10);
-    place_knob_r(temp_lo_knob, z1_cx, z1_cy, 0.2f, z1_r, 10);
-    place_knob_r(temp_hi_knob, z1_cx, z1_cy, 0.8f, z1_r, 10);
+    temp_val = clabel(z1, z1_cx, z1_cy - 18, 200, &lv_font_montserrat_38, COL_TEXT, "--");
 
-    temp_knob = make_knob(z1, COL_TEXT, 18);
-    place_knob_r(temp_knob, z1_cx, z1_cy, 0.0f, z1_r, 18);
-
-    /* 38, not 48: this has to hold six glyphs at the extremes -- "104.7" in
-     * midsummer and "-22.3" in midwinter -- and at 48 even "89.7" ran into the
-     * gauge ring. Width 200 rather than 180 for the same reason. The y offset
-     * follows the smaller line height so the number stays centred in the ring. */
-    temp_val = clabel(z1, z1_cx, z1_cy - 20, 200, &lv_font_montserrat_38, COL_TEXT, "--");
-
-    /* Styled metric pills */
-    temp_feels_pill = make_pill(z1, 10, 160, 106, 24, COL_TEMP_HOT, COL_TEMP_HOT, "Feels --°");
-    temp_dew_pill = make_pill(z1, 122, 160, 106, 24, COL_TEMP_COLD, COL_TEMP_COLD, "Dew --°");
-    temp_hilo_lbl = clabel(z1, z1_cx, 192, 220, &lv_font_montserrat_14, COL_DIM, "Hi --°   Lo --°   RH --%");
+    temp_stats_lbl = label(z1, &lv_font_montserrat_14, COL_DIM, "Feels --   Dew --   --% RH");
+    lv_obj_align(temp_stats_lbl, LV_ALIGN_BOTTOM_LEFT, 6, -8);
+    lv_obj_set_width(temp_stats_lbl, Z1_W - 12);
 
     /* --- ZONE 2: SPLIT WIND COMPASS & SPEED --- */
     lv_obj_t *z2 = make_card(scr, PAD + Z1_W + 6, TOP_Y, Z2_W, TOP_H, COL_CARD_BORDER, COL_WIND_NEON);
@@ -831,17 +988,14 @@ static void build_top_deck(lv_obj_t *scr)
     lv_obj_align(cond_badge, LV_ALIGN_TOP_RIGHT, -6, 2);
 
     /* Weather Icon (Center) */
-    cond_icon = wx_icon_create(z4, 84, true);
+    /* Hero icon — one Lottie animation is fine; the forecast strip stays static. */
+    cond_icon = wx_icon_create(z4, 112, true);
     if (cond_icon) {
-        lv_obj_align(cond_icon, LV_ALIGN_TOP_MID, 0, 32);
+        lv_obj_align(cond_icon, LV_ALIGN_TOP_MID, 0, 26);
     }
 
-    cond_title = clabel(z4, Z4_W / 2, 134, Z4_W - 12, &lv_font_montserrat_24, COL_TEXT, "Clear");
-    cond_sub = clabel(z4, Z4_W / 2, 168, Z4_W - 12, &lv_font_montserrat_14, COL_DIM, "Today: Hi --°  Lo --°");
-
-    smart_pill = make_pill(z4, 8, 196, Z4_W - 16, 26, COL_WIND_NEON, COL_TEXT, "Checking forecast...");
-    lv_obj_set_width(smart_pill, Z4_W - 28);
-    lv_label_set_long_mode(smart_pill, LV_LABEL_LONG_DOT);
+    cond_title = clabel(z4, Z4_W / 2, 148, Z4_W - 12, &lv_font_montserrat_24, COL_TEXT, "—");
+    cond_sub = clabel(z4, Z4_W / 2, 182, Z4_W - 12, &lv_font_montserrat_14, COL_DIM, "Today: Hi --°  Lo --°");
 }
 
 static void build_mid_deck(lv_obj_t *scr)
@@ -1014,63 +1168,49 @@ static void fc_set_icon(int idx, const char *slug)
     if (!slug || !slug[0] || idx < 0 || idx >= FC_COLS || !fc[idx].icon) {
         return;
     }
-    if (s_fc_lottie) {
-        wx_icon_set(fc[idx].icon, slug);
-    } else {
-        const lv_image_dsc_t *dsc = wx_icon_get_image_dsc(slug);
-        if (dsc) {
-            lv_image_set_src(fc[idx].icon, dsc);
-        }
-    }
-}
-
-static void rebuild_forecast_icons(void)
-{
-    cfg_t c;
-    cfg_get(&c);
-    bool want_lottie = c.animate_forecast;
-    if (want_lottie == s_fc_lottie && !s_fc_rebuild) {
+    if (strncmp(s_fc_icon_slug[idx], slug, sizeof(s_fc_icon_slug[idx])) == 0) {
         return;
     }
-    s_fc_lottie = want_lottie;
+    strncpy(s_fc_icon_slug[idx], slug, sizeof(s_fc_icon_slug[idx]) - 1);
+    s_fc_icon_slug[idx][sizeof(s_fc_icon_slug[idx]) - 1] = '\0';
 
-    for (int i = 0; i < FC_COLS; i++) {
-        if (!fc[i].card) {
-            continue;
-        }
-        if (fc[i].icon) {
-            lv_obj_delete(fc[i].icon);
-            fc[i].icon = NULL;
-        }
-        const int col_w = (SCR_W - 2 * PAD - 16) / FC_COLS;
-        const int cx = col_w / 2;
-        if (s_fc_lottie) {
-            fc[i].icon = wx_icon_create(fc[i].card, 44, true);
-        } else {
-            fc[i].icon = lv_image_create(fc[i].card);
-            lv_obj_set_size(fc[i].icon, 44, 44);
-        }
-        lv_obj_set_pos(fc[i].icon, cx - 22, 22);
+    const lv_image_dsc_t *dsc = wx_icon_get_image_dsc(slug);
+    if (dsc) {
+        lv_image_set_src(fc[idx].icon, dsc);
     }
-    s_fc_rebuild = false;
 }
 
 void ui_forecast_mode_changed(void)
 {
-    s_fc_rebuild = true;
+    /* Forecast strip uses static bitmap icons only; setting kept for compatibility. */
+}
+
+void ui_notify_forecast_updated(void)
+{
+    /* Called from tempest_rest — never touch LVGL here; ui_tick() redraws. */
+    s_forecast_dirty = true;
 }
 
 static void build_forecast_deck(lv_obj_t *scr)
 {
-    lv_obj_t *p = make_card(scr, PAD, FC_Y, SCR_W - 2 * PAD, FC_H, COL_CARD_BORDER, COL_TEMP_AMBER);
-    const int col_w = (SCR_W - 2 * PAD - 16) / FC_COLS;
+    s_forecast_panel = make_card(scr, PAD, FC_Y, SCR_W - 2 * PAD, FC_H, COL_CARD_BORDER, COL_TEMP_AMBER);
+    lv_obj_t *p = s_forecast_panel;
+    const int inner_w = (SCR_W - 2 * PAD) - 2 * FC_INSET;
+    const int col_w = inner_w / FC_COLS;
+
+    lv_obj_t *fc_title = label(p, &lv_font_montserrat_14, COL_TEMP_AMBER, "7-DAY FORECAST");
+    lv_obj_align(fc_title, LV_ALIGN_TOP_MID, 0, 6);
+
+    memset(s_fc_icon_slug, 0, sizeof(s_fc_icon_slug));
 
     for (int i = 0; i < FC_COLS; i++) {
-        int x = i * col_w;
+        int x = FC_INSET + i * col_w;
         lv_obj_t *col_card = lv_obj_create(p);
-        lv_obj_set_pos(col_card, x, 0);
-        lv_obj_set_size(col_card, col_w, FC_H - 16);
-        lv_obj_set_style_bg_opa(col_card, LV_OPA_TRANSP, 0);
+        lv_obj_remove_style_all(col_card);
+        lv_obj_set_pos(col_card, x, 20);
+        lv_obj_set_size(col_card, col_w, FC_H - 38);
+        lv_obj_set_style_bg_color(col_card, COL_CARD, 0);
+        lv_obj_set_style_bg_opa(col_card, LV_OPA_COVER, 0);
         lv_obj_set_style_border_width(col_card, 0, 0);
         lv_obj_set_style_pad_all(col_card, 0, 0);
         lv_obj_clear_flag(col_card, LV_OBJ_FLAG_SCROLLABLE);
@@ -1078,56 +1218,33 @@ static void build_forecast_deck(lv_obj_t *scr)
         fc[i].card = col_card;
         const int cx = col_w / 2;
 
-        fc[i].day = clabel(col_card, cx, 2, col_w, &lv_font_montserrat_14, COL_DIM, (i == 0) ? "TODAY" : "--");
+        fc[i].day = clabel(col_card, cx, 0, col_w, &lv_font_montserrat_14, COL_DIM, (i == 0) ? "TODAY" : "--");
 
-        /* Icon widget created in rebuild_forecast_icons(). */
-        fc[i].icon = NULL;
+        fc[i].icon = lv_image_create(col_card);
+        lv_obj_set_size(fc[i].icon, 44, 44);
+        lv_obj_set_pos(fc[i].icon, cx - 22, 18);
+        lv_obj_remove_style_all(fc[i].icon);
+        lv_obj_set_style_bg_opa(fc[i].icon, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(fc[i].icon, 0, 0);
+        lv_obj_set_style_pad_all(fc[i].icon, 0, 0);
+        fc_set_icon(i, "clear-day");
 
-        fc[i].pop = clabel(col_card, cx, 70, col_w, &lv_font_montserrat_14, COL_RAIN_NEON, "");
+        fc[i].pop = clabel(col_card, cx, 64, col_w, &lv_font_montserrat_14, COL_RAIN_NEON, "");
 
-        /* Temperature Range Bar */
-        fc[i].lo = clabel(col_card, cx - 38, 98, 36, &lv_font_montserrat_16, COL_FAINT, "--");
-
-        fc[i].bar_bg = lv_obj_create(col_card);
-        lv_obj_set_size(fc[i].bar_bg, 46, 6);
-        lv_obj_set_pos(fc[i].bar_bg, cx - 23, 104);
-        lv_obj_set_style_bg_color(fc[i].bar_bg, COL_TRACK, 0);
-        lv_obj_set_style_radius(fc[i].bar_bg, 3, 0);
-        lv_obj_set_style_border_width(fc[i].bar_bg, 0, 0);
-        lv_obj_clear_flag(fc[i].bar_bg, LV_OBJ_FLAG_SCROLLABLE);
-
-        fc[i].bar_fill = lv_obj_create(fc[i].bar_bg);
-        lv_obj_set_size(fc[i].bar_fill, 20, 6);
-        lv_obj_set_pos(fc[i].bar_fill, 0, 0);
-        lv_obj_set_style_bg_color(fc[i].bar_fill, COL_TEMP_AMBER, 0);
-        lv_obj_set_style_radius(fc[i].bar_fill, 3, 0);
-        lv_obj_set_style_border_width(fc[i].bar_fill, 0, 0);
-        lv_obj_clear_flag(fc[i].bar_fill, LV_OBJ_FLAG_SCROLLABLE);
-
-        if (i == 0) {
-            fc[i].bar_dot = lv_obj_create(fc[i].bar_bg);
-            lv_obj_set_size(fc[i].bar_dot, 8, 8);
-            lv_obj_set_pos(fc[i].bar_dot, 0, -1);
-            lv_obj_set_style_radius(fc[i].bar_dot, LV_RADIUS_CIRCLE, 0);
-            lv_obj_set_style_bg_color(fc[i].bar_dot, COL_TEXT, 0);
-            lv_obj_set_style_border_width(fc[i].bar_dot, 0, 0);
-            lv_obj_clear_flag(fc[i].bar_dot, LV_OBJ_FLAG_SCROLLABLE);
-        } else {
-            fc[i].bar_dot = NULL;
-        }
-
-        fc[i].hi = clabel(col_card, cx + 38, 98, 36, &lv_font_montserrat_16, COL_TEXT, "--");
+        fc[i].lo = clabel(col_card, cx - 38, 88, 36, &lv_font_montserrat_16, COL_DIM, "--");
+        fc[i].hi = clabel(col_card, cx + 38, 88, 36, &lv_font_montserrat_16, COL_TEXT, "--");
 
         if (i < FC_COLS - 1) {
             lv_obj_t *sep = lv_obj_create(p);
-            lv_obj_set_pos(sep, x + col_w, 12);
-            lv_obj_set_size(sep, 1, FC_H - 40);
+            lv_obj_remove_style_all(sep);
+            lv_obj_set_pos(sep, x + col_w, 14);
+            lv_obj_set_size(sep, 1, FC_H - 44);
             lv_obj_set_style_bg_color(sep, COL_CARD_BORDER, 0);
+            lv_obj_set_style_bg_opa(sep, LV_OPA_COVER, 0);
             lv_obj_set_style_border_width(sep, 0, 0);
             lv_obj_clear_flag(sep, LV_OBJ_FLAG_SCROLLABLE);
         }
     }
-    rebuild_forecast_icons();
 }
 
 static void on_gear(lv_event_t *e)
@@ -1159,28 +1276,12 @@ static void apply_brightness(int64_t now)
             target = cfg_brightness_now();
         }
     }
+
     s_scheduled_brightness = target;
 
-    cfg_t cfg_scr;
-    cfg_get(&cfg_scr);
-    if (cfg_scr.screensaver_idle_min > 0 &&
-        !settings_is_visible() && !wifi_setup_is_visible() && !ota_in_progress()) {
-        uint32_t idle_ms = lv_tick_get() - s_last_input_ms;
-        uint32_t limit_ms = (uint32_t)cfg_scr.screensaver_idle_min * 60U * 1000U;
-        if (idle_ms >= limit_ms) {
-            if (!s_screensaver_active) {
-                s_screensaver_active = true;
-                ESP_LOGI(TAG, "screensaver on (%u min idle)",
-                         cfg_scr.screensaver_idle_min);
-            }
-            target = cfg_scr.screensaver_brightness;
-        }
-    }
-
-    if (s_screensaver_active) {
-        cfg_t c2;
-        cfg_get(&c2);
-        target = c2.screensaver_brightness;
+    /* Display stays permanently on and visible (no screensaver blanking) */
+    if (target < 60) {
+        target = 75;
     }
 
     static uint8_t last_applied;
@@ -1217,6 +1318,7 @@ esp_err_t ui_init(void)
     lv_obj_invalidate(s_main_screen);
     s_ui_ready = true;
     s_last_input_ms = lv_tick_get();
+    s_boot_ms = s_last_input_ms;
     s_scheduled_brightness = cfg_brightness_now();
 
     ESP_LOGI(TAG, "commercial weather console built (%dx%d)", SCR_W, SCR_H);
@@ -1237,18 +1339,25 @@ static void set_text(lv_obj_t *l, const char *fmt, ...)
     lv_label_set_text(l, buf);
 }
 
-static void update_hdr_aqi(const wx_state_t *s)
+static void update_hdr_signal(int hub_rssi, int dev_rssi)
 {
-    if (s->aqi_valid && s->aqi_val > 0) {
-        lv_color_t ac = aqi_color(s->aqi_val);
-        lv_obj_clear_flag(hdr_aqi_dot, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(hdr_aqi_lbl, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_style_bg_color(hdr_aqi_dot, ac, 0);
-        set_text(hdr_aqi_lbl, "AQI %d", s->aqi_val);
-        lv_obj_set_style_text_color(hdr_aqi_lbl, ac, 0);
-    } else {
-        lv_obj_add_flag(hdr_aqi_dot, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(hdr_aqi_lbl, LV_OBJ_FLAG_HIDDEN);
+    int rssi = 0;
+    int8_t wifi_rssi = net_get_rssi();
+    if (wifi_rssi != 0) {
+        rssi = wifi_rssi;
+    } else if (hub_rssi != 0) {
+        rssi = hub_rssi;
+    } else if (dev_rssi != 0) {
+        rssi = dev_rssi;
+    }
+
+    int active = (rssi != 0) ? rssi_to_bars(rssi) : 0;
+    for (int i = 0; i < SIG_BARS; i++) {
+        bool on = (i < active);
+        lv_obj_set_style_bg_color(hdr_sig_bars[i],
+                                  on ? sig_bar_color(i) : COL_SIG_DIM, 0);
+        lv_obj_set_style_bg_opa(hdr_sig_bars[i],
+                                on ? LV_OPA_COVER : LV_OPA_30, 0);
     }
 }
 
@@ -1326,84 +1435,6 @@ static void update_alert_banner(const wx_state_t *s, int64_t now)
     }
 }
 
-static void update_smart_pill(const wx_state_t *s)
-{
-    char msg[96];
-    lv_color_t border = COL_WIND_NEON;
-    lv_color_t text = COL_TEXT;
-
-    if (s->obs_valid && wx_obs_is_stale(s) && net_time_is_valid()) {
-        int mins = (int)((time(NULL) - s->obs_epoch) / 60);
-        if (mins < 1) {
-            mins = 1;
-        }
-        snprintf(msg, sizeof(msg), "Station data %d min old", mins);
-        border = COL_TEMP_AMBER;
-        text = COL_TEMP_AMBER;
-    } else if (s->forecast_valid && wx_forecast_is_stale(s)) {
-        snprintf(msg, sizeof(msg), "Forecast outdated — check Wi-Fi");
-        border = COL_TEMP_AMBER;
-        text = COL_DIM;
-    } else if (s->obs_valid && s->rain_rate_mm_hr > 0.05f) {
-        char rate[16];
-        snprintf(rate, sizeof(rate), cfg_rain_fmt(), (double)U_RAIN(s->rain_rate_mm_hr));
-        snprintf(msg, sizeof(msg), "Rain falling now at %s %s/hr", rate, U_RAIN_SUF);
-        border = COL_RAIN_NEON;
-    } else if (s->hourly_valid && s->hourly_count > 0) {
-        int rain_start = -1;
-        for (int i = 0; i < s->hourly_count; i++) {
-            if (s->hourly[i].precip_probability >= 40) {
-                rain_start = i;
-                break;
-            }
-        }
-        if (rain_start >= 0) {
-            char hr[16];
-            format_hour_label(hr, sizeof(hr), s->hourly[rain_start].hour_epoch);
-            snprintf(msg, sizeof(msg), "Rain likely around %s (%d%%)",
-                     hr, s->hourly[rain_start].precip_probability);
-            border = COL_RAIN_NEON;
-        } else if (s->comfort_mode == WX_COMFORT_HEAT_INDEX &&
-                   (strcmp(s->comfort_risk, "Danger") == 0 ||
-                    strcmp(s->comfort_risk, "Extreme Danger") == 0)) {
-            snprintf(msg, sizeof(msg), "Heat index %s — take it easy", s->comfort_risk);
-            border = COL_TEMP_HOT;
-            text = COL_TEMP_AMBER;
-        } else if (s->pressure_trend == WX_TREND_FALLING_FAST) {
-            snprintf(msg, sizeof(msg), "Pressure falling fast — storms possible");
-            border = COL_PRESS_NEON;
-        } else if (s->aqi_valid && s->aqi_val > 100) {
-            snprintf(msg, sizeof(msg), "AQI %d — %s", s->aqi_val, s->aqi_category);
-            border = aqi_color(s->aqi_val);
-        } else if (s->current_conditions[0]) {
-            snprintf(msg, sizeof(msg), "%s", s->current_conditions);
-            border = COL_SUN_GOLD;
-        } else {
-            snprintf(msg, sizeof(msg), "All clear — no advisories");
-            border = COL_OK;
-            text = COL_DIM;
-        }
-    } else if (s->comfort_mode == WX_COMFORT_WIND_CHILL &&
-               strcmp(s->comfort_risk, "Danger") == 0) {
-        snprintf(msg, sizeof(msg), "Wind chill %s — dress warm", s->comfort_risk);
-        border = COL_TEMP_COLD;
-    } else if (s->current_conditions[0]) {
-        snprintf(msg, sizeof(msg), "%s", s->current_conditions);
-        border = COL_SUN_GOLD;
-    } else {
-        snprintf(msg, sizeof(msg), "Waiting for forecast data...");
-        border = COL_DIM;
-        text = COL_DIM;
-    }
-
-    lv_label_set_text(smart_pill, msg);
-    lv_obj_t *pill = lv_obj_get_parent(smart_pill);
-    if (pill) {
-        lv_obj_set_style_border_color(pill, border, 0);
-    }
-    lv_obj_set_style_text_color(smart_pill, text, 0);
-}
-
 static void update_header(const wx_state_t *s, int64_t now)
 {
     /* Digital Clock */
@@ -1423,29 +1454,25 @@ static void update_header(const wx_state_t *s, int64_t now)
     strftime(date_str, sizeof(date_str), "%A, %b %d, %Y", &lt);
     lv_label_set_text(hdr_date, date_str);
 
-    /* Station Status Dot & Diagnostics */
+    /* Link indicator: green = live UDP, amber = degraded, red = offline */
     if (!s->wifi_connected) {
         lv_obj_set_style_bg_color(hdr_dot, COL_ALERT, 0);
-        lv_label_set_text(hdr_station, "NO WI-FI");
     } else if (wx_udp_is_stale(s) && tempest_ws_is_active()) {
         lv_obj_set_style_bg_color(hdr_dot, COL_TEMP_AMBER, 0);
-        lv_label_set_text(hdr_station, "WS LINK");
     } else if (wx_udp_is_stale(s)) {
         lv_obj_set_style_bg_color(hdr_dot, COL_TEMP_AMBER, 0);
-        lv_label_set_text(hdr_station, "NO UDP");
     } else if (wx_obs_is_stale(s)) {
         lv_obj_set_style_bg_color(hdr_dot, COL_TEMP_AMBER, 0);
-        lv_label_set_text(hdr_station, "TEMPEST PRO");
     } else if (s->obs_valid) {
         lv_obj_set_style_bg_color(hdr_dot, COL_OK, 0);
-        lv_label_set_text(hdr_station, "TEMPEST PRO");
     } else {
         lv_obj_set_style_bg_color(hdr_dot, COL_IDLE, 0);
-        lv_label_set_text(hdr_station, "TEMPEST PRO");
     }
 
+    update_hdr_signal(s->hub_rssi, s->device_rssi);
+
     if (s->battery_v > 0.0f) {
-        set_text(hdr_health, "BAT: %.2fV  RSSI: %d dBm", (double)s->battery_v, s->hub_rssi);
+        set_text(hdr_health, "BAT %.2fV", (double)s->battery_v);
         if (s->battery_v > 2.6f) {
             lv_label_set_text(hdr_bat_icon, LV_SYMBOL_BATTERY_FULL);
             lv_obj_set_style_text_color(hdr_bat_icon, COL_OK, 0);
@@ -1457,8 +1484,6 @@ static void update_header(const wx_state_t *s, int64_t now)
             lv_obj_set_style_text_color(hdr_bat_icon, COL_ALERT, 0);
         }
     }
-
-    update_hdr_aqi(s);
 }
 
 static void update_top_deck(const wx_state_t *s, int64_t now)
@@ -1484,6 +1509,9 @@ static void update_top_deck(const wx_state_t *s, int64_t now)
         lv_obj_set_style_text_color(cond_badge, COL_DIM, 0);
     }
 
+    /* Forecast-driven card content updates even when UDP obs is still booting. */
+    update_conditions_card(s, now);
+
     if (!s->obs_valid) {
         return;
     }
@@ -1492,43 +1520,31 @@ static void update_top_deck(const wx_state_t *s, int64_t now)
     float t_cur = U_TEMP(s->air_temp_c);
     set_text(temp_val, "%.1f°", (double)t_cur);
 
+    if (temp_ring) {
+        lv_obj_set_style_arc_color(temp_ring, temp_color_at_c(s->air_temp_c), LV_PART_MAIN);
+    }
+
     float feels = U_TEMP(s->feels_like_c);
     float dew = U_TEMP(s->dew_point_c);
+    lv_color_t stats_col = COL_DIM;
 
     if (s->comfort_mode == WX_COMFORT_HEAT_INDEX) {
-        float hi = U_TEMP(s->heat_index_c);
-        set_text(temp_feels_pill, "Heat Idx %.0f°", (double)hi);
-        lv_obj_set_style_text_color(temp_feels_pill,
-            strcmp(s->comfort_risk, "Danger") == 0 ||
-            strcmp(s->comfort_risk, "Extreme Danger") == 0 ? COL_ALERT :
-            strcmp(s->comfort_risk, "Caution") == 0 ? COL_TEMP_AMBER : COL_OK, 0);
+        feels = U_TEMP(s->heat_index_c);
+        stats_col = (strcmp(s->comfort_risk, "Danger") == 0 ||
+                     strcmp(s->comfort_risk, "Extreme Danger") == 0) ? COL_ALERT :
+                    (strcmp(s->comfort_risk, "Caution") == 0) ? COL_TEMP_AMBER : COL_OK;
+        set_text(temp_stats_lbl, "Heat Idx %.1f°   Dew %.1f°   %.0f%% RH",
+                 (double)feels, (double)dew, (double)s->humidity_pct);
     } else if (s->comfort_mode == WX_COMFORT_WIND_CHILL) {
-        float wc = U_TEMP(s->wind_chill_c);
-        set_text(temp_feels_pill, "Wind Chill %.0f°", (double)wc);
-        lv_obj_set_style_text_color(temp_feels_pill,
-            strcmp(s->comfort_risk, "Extreme Danger") == 0 ? COL_ALERT :
-            COL_TEMP_COLD, 0);
+        feels = U_TEMP(s->wind_chill_c);
+        stats_col = (strcmp(s->comfort_risk, "Extreme Danger") == 0) ? COL_ALERT : COL_TEMP_COLD;
+        set_text(temp_stats_lbl, "Wind Chill %.1f°   Dew %.1f°   %.0f%% RH",
+                 (double)feels, (double)dew, (double)s->humidity_pct);
     } else {
-        set_text(temp_feels_pill, "Feels %.0f°", (double)feels);
-        lv_obj_set_style_text_color(temp_feels_pill, COL_DIM, 0);
+        set_text(temp_stats_lbl, "Feels %.1f°   Dew %.1f°   %.0f%% RH",
+                 (double)feels, (double)dew, (double)s->humidity_pct);
     }
-    set_text(temp_dew_pill, "Dew %.0f°", (double)dew);
-
-    float t_lo = s->daily_valid ? U_TEMP(s->temp_low_today_c) : t_cur;
-    float t_hi = s->daily_valid ? U_TEMP(s->temp_high_today_c) : t_cur;
-    set_text(temp_hilo_lbl, "Hi %.0f°  Lo %.0f°  •  %.0f%% RH", (double)t_hi, (double)t_lo, (double)s->humidity_pct);
-
-    float t_frac = (s->air_temp_c - TEMP_MIN_C) / (TEMP_MAX_C - TEMP_MIN_C);
-    place_knob_r(temp_knob, Z1_W / 2, 92, t_frac, 65, 18);
-
-    if (s->daily_valid) {
-        float lo_frac = (s->temp_low_today_c - TEMP_MIN_C) / (TEMP_MAX_C - TEMP_MIN_C);
-        float hi_frac = (s->temp_high_today_c - TEMP_MIN_C) / (TEMP_MAX_C - TEMP_MIN_C);
-        place_knob_r(temp_lo_knob, Z1_W / 2, 92, lo_frac, 65, 10);
-        place_knob_r(temp_hi_knob, Z1_W / 2, 92, hi_frac, 65, 10);
-        lv_obj_clear_flag(temp_lo_knob, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(temp_hi_knob, LV_OBJ_FLAG_HIDDEN);
-    }
+    lv_obj_set_style_text_color(temp_stats_lbl, stats_col, 0);
 
     /* --- Zone 2: Wind Compass & Speed --- */
     /* The big readout and the needle follow rapid_wind, which the hub sends
@@ -1634,22 +1650,6 @@ static void update_top_deck(const wx_state_t *s, int64_t now)
         lv_obj_add_flag(in_status_lbl, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(in_temp_cap, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(in_hum_cap, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    /* --- Zone 4: Current Conditions Centerpiece --- */
-    if (s->current_conditions[0] != '\0') {
-        lv_label_set_text(cond_title, s->current_conditions);
-    } else {
-        lv_label_set_text(cond_title, "Current Conditions");
-    }
-    wx_icon_set(cond_icon, s->current_icon);
-
-    if (s->forecast_days > 0) {
-        float f_hi = U_TEMP(s->forecast[0].air_temp_high_c);
-        float f_lo = U_TEMP(s->forecast[0].air_temp_low_c);
-        set_text(cond_sub, "Today: Hi %.0f°  Lo %.0f°", (double)f_hi, (double)f_lo);
-    } else if (s->daily_valid) {
-        set_text(cond_sub, "Today: Hi %.0f°  Lo %.0f°", (double)t_hi, (double)t_lo);
     }
 }
 
@@ -1799,29 +1799,8 @@ static void update_mid_deck(const wx_state_t *s, int64_t now)
 
 static void update_forecast_deck(const wx_state_t *s)
 {
-    bool has_fcst = s->forecast_valid && s->forecast_days > 0;
+    bool has_fcst = s->forecast_days > 0;
     char buf[16];
-
-    float week_min = 100.0f;
-    float week_max = -100.0f;
-
-    if (has_fcst) {
-        for (int i = 0; i < s->forecast_days && i < FC_COLS; i++) {
-            if (s->forecast[i].air_temp_low_c < week_min) {
-                week_min = s->forecast[i].air_temp_low_c;
-            }
-            if (s->forecast[i].air_temp_high_c > week_max) {
-                week_max = s->forecast[i].air_temp_high_c;
-            }
-        }
-    } else {
-        week_min = s->air_temp_c - 10.0f;
-        week_max = s->air_temp_c + 10.0f;
-    }
-
-    if (week_max <= week_min) {
-        week_max = week_min + 1.0f;
-    }
 
     for (int i = 0; i < FC_COLS; i++) {
         if (!has_fcst) {
@@ -1838,9 +1817,7 @@ static void update_forecast_deck(const wx_state_t *s)
                 snprintf(buf, sizeof(buf), "TODAY %d", tm_d.tm_mday);
                 lv_label_set_text(fc[i].day, buf);
                 lv_obj_set_style_text_color(fc[i].day, COL_WIND_NEON, 0);
-                const lv_image_dsc_t *dsc = wx_icon_get_image_dsc("clear-day");
-                if (dsc && fc[i].icon && !s_fc_lottie) lv_image_set_src(fc[i].icon, dsc);
-                else fc_set_icon(i, "clear-day");
+                fc_set_icon(i, "clear-day");
                 if (s->daily_valid) {
                     set_text(fc[i].hi, "%.0f°", (double)U_TEMP(s->temp_high_today_c));
                     set_text(fc[i].lo, "%.0f°", (double)U_TEMP(s->temp_low_today_c));
@@ -1852,9 +1829,7 @@ static void update_forecast_deck(const wx_state_t *s)
                 snprintf(buf, sizeof(buf), "%s %d", day_name, tm_d.tm_mday);
                 lv_label_set_text(fc[i].day, buf);
                 lv_obj_set_style_text_color(fc[i].day, COL_DIM, 0);
-                const lv_image_dsc_t *dsc = wx_icon_get_image_dsc("clear-day");
-                if (dsc && fc[i].icon && !s_fc_lottie) lv_image_set_src(fc[i].icon, dsc);
-                else fc_set_icon(i, "clear-day");
+                fc_set_icon(i, "clear-day");
                 set_text(fc[i].hi, "--°");
                 set_text(fc[i].lo, "--°");
             }
@@ -1868,15 +1843,18 @@ static void update_forecast_deck(const wx_state_t *s)
             lv_label_set_text(fc[i].hi, "");
             lv_label_set_text(fc[i].lo, "");
             lv_label_set_text(fc[i].pop, "");
-            lv_obj_add_flag(fc[i].bar_bg, LV_OBJ_FLAG_HIDDEN);
             continue;
         }
 
         const wx_forecast_day_t *d = &s->forecast[i];
-        lv_obj_clear_flag(fc[i].bar_bg, LV_OBJ_FLAG_HIDDEN);
         if (fc[i].icon) lv_obj_clear_flag(fc[i].icon, LV_OBJ_FLAG_HIDDEN);
 
-        time_t dt = (time_t)d->day_start_local;
+        time_t dt;
+        if (d->day_start_local > 1600000000LL) {
+            dt = (time_t)d->day_start_local;
+        } else {
+            dt = time(NULL) + (time_t)i * 86400;
+        }
         struct tm tm_day;
         localtime_r(&dt, &tm_day);
         char day_name[8];
@@ -1907,27 +1885,6 @@ static void update_forecast_deck(const wx_state_t *s)
         } else {
             lv_label_set_text(fc[i].pop, "");
         }
-
-        /* Range Bar */
-        const int bar_total_w = 46;
-        float f_lo = (d->air_temp_low_c - week_min) / (week_max - week_min);
-        float f_hi = (d->air_temp_high_c - week_min) / (week_max - week_min);
-        if (f_lo < 0.0f) f_lo = 0.0f;
-        if (f_hi > 1.0f) f_hi = 1.0f;
-        int bar_x = (int)(f_lo * bar_total_w);
-        int bar_w = (int)((f_hi - f_lo) * bar_total_w);
-        if (bar_w < 4) bar_w = 4;
-
-        lv_obj_set_pos(fc[i].bar_fill, bar_x, 0);
-        lv_obj_set_size(fc[i].bar_fill, bar_w, 6);
-
-        if (i == 0 && fc[i].bar_dot && s->obs_valid) {
-            float f_cur = (s->air_temp_c - week_min) / (week_max - week_min);
-            if (f_cur < 0.0f) f_cur = 0.0f;
-            if (f_cur > 1.0f) f_cur = 1.0f;
-            int dot_x = (int)(f_cur * bar_total_w) - 4;
-            lv_obj_set_pos(fc[i].bar_dot, dot_x, -1);
-        }
     }
 
     lv_opa_t f_opa = (has_fcst && wx_forecast_is_stale(s)) ? LV_OPA_40 : LV_OPA_COVER;
@@ -1943,8 +1900,11 @@ void ui_tick(void)
     int64_t now = (int64_t)time(NULL);
     apply_brightness(now);
 
-    if (s_fc_rebuild) {
-        rebuild_forecast_icons();
+    if (s_forecast_dirty) {
+        s_forecast_dirty = false;
+        if (s_forecast_panel) {
+            lv_obj_invalidate(s_forecast_panel);
+        }
     }
 
     if (settings_is_visible()) {
@@ -1964,6 +1924,12 @@ void ui_tick(void)
         return;
     }
 
+    /* Recover if boot landed on an empty screen somehow. */
+    if (s_main_screen && lv_screen_active() != s_main_screen) {
+        lv_screen_load(s_main_screen);
+        lv_obj_invalidate(s_main_screen);
+    }
+
     wx_state_t s;
     wx_snapshot(&s);
 
@@ -1973,7 +1939,6 @@ void ui_tick(void)
     update_top_deck(&s, now);
     update_mid_deck(&s, now);
     update_forecast_deck(&s);
-    update_smart_pill(&s);
 
     audio_scheduler_tick(now, s.current_icon);
 }

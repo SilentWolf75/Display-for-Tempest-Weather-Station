@@ -39,7 +39,7 @@ static esp_err_t mdns_start(void)
     }
 
     mdns_hostname_set("tempest");
-    mdns_instance_name_set("Tempest Weather Display");
+    mdns_instance_name_set("Display for Tempest Weather Station");
 
     err = mdns_service_add(NULL, "_http", "_tcp", WEB_PORT, NULL, 0);
     if (err != ESP_OK) {
@@ -64,7 +64,7 @@ static void mdns_stop(void)
 
 static const char HTML_PAGE[] = 
 "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-"<title>Tempest Weather Console</title>"
+"<title>Weather Station Display</title>"
 "<style>"
 ":root{--bg:#0b0f19;--card:#151d2c;--border:#243048;--text:#f8fafc;--dim:#94a3b8;--accent:#38bdf8;--ok:#10b981;--warn:#f59e0b;--alert:#ef4444;}"
 "body{margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text);padding:16px;}"
@@ -91,7 +91,7 @@ static const char HTML_PAGE[] =
 "</style></head><body>"
 "<div id='alert_banner' class='alert-banner'></div>"
 "<div class='header'>"
-"<div class='title'>⛈️ Tempest Weather Console</div>"
+"<div class='title'>Weather Station Display</div>"
 "<div id='station_status' style='font-size:13px;color:var(--ok);'>● Connected</div>"
 "</div>"
 "<div class='grid'>"
@@ -176,9 +176,13 @@ static const char HTML_PAGE[] =
 "function drawChart(id,data,color){"
 "let c=document.getElementById(id);if(!c||!Array.isArray(data))return;"
 "let ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);"
-"let pts=data.filter(function(v){return v!=null;});if(pts.length<2)return;"
+"let pts=data.filter(function(v){return v!=null;});if(pts.length<1)return;"
 "let mn=Math.min.apply(null,pts),mx=Math.max.apply(null,pts),pad=4;"
+"if(mx===mn){mx=mn+1;}"
 "ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();"
+"if(pts.length===1){"
+"let y=c.height-pad-((pts[0]-mn)/(mx-mn||1))*(c.height-2*pad);"
+"ctx.moveTo(pad,y);ctx.lineTo(c.width-pad,y);ctx.stroke();return;}"
 "let j=0;for(let i=0;i<data.length;i++){if(data[i]==null)continue;"
 "let x=pad+(j/(pts.length-1))*(c.width-2*pad);"
 "let y=c.height-pad-((data[i]-mn)/(mx-mn||1))*(c.height-2*pad);"
@@ -196,6 +200,7 @@ static const char HTML_PAGE[] =
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
     return httpd_resp_send(req, HTML_PAGE, sizeof(HTML_PAGE) - 1);
 }
 
@@ -322,7 +327,8 @@ static void history_add_series(cJSON *root, const char *key,
     if (!arr) {
         return;
     }
-    for (int i = 0; i < n; i += 3) {
+    int step = (n > 48) ? 3 : 1;
+    for (int i = 0; i < n; i += step) {
         if (isnan(buf[i])) {
             cJSON_AddItemToArray(arr, cJSON_CreateNull());
         } else {
@@ -411,6 +417,11 @@ static esp_err_t api_chime_handler(httpd_req_t *req)
     return httpd_resp_send(req, "{\"status\":\"ok\",\"sound\":\"Hourly Chime\"}", -1);
 }
 
+bool web_server_is_running(void)
+{
+    return (s_server != NULL);
+}
+
 esp_err_t web_server_start(void)
 {
     if (s_server) return ESP_OK;
@@ -418,7 +429,8 @@ esp_err_t web_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = WEB_PORT;
     config.ctrl_port = WEB_PORT + 1;
-    config.stack_size = 12288;
+    config.stack_size = 8192;
+    config.task_priority = 4;
     config.lru_purge_enable = true;
     config.max_uri_handlers = 12;
 

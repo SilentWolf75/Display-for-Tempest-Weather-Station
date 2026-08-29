@@ -5,6 +5,7 @@
 #include "esp_check.h"
 #include "driver/i2c_master.h"
 #include "driver/ledc.h"
+#include "driver/gpio.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_ldo_regulator.h"
@@ -26,7 +27,11 @@ static const char *TAG = "display";
 
 #define BACKLIGHT_LEDC_TIMER    LEDC_TIMER_0
 #define BACKLIGHT_LEDC_CHANNEL  LEDC_CHANNEL_0
-#define BACKLIGHT_DUTY_RES      LEDC_TIMER_10_BIT
+#define BACKLIGHT_DUTY_RES      LEDC_TIMER_11_BIT
+#define BACKLIGHT_DUTY_MAX      ((1u << 11) - 1u)
+/* Elecrow's BSP uses 30 kHz; on this panel that produced a lit-backlight /
+ * dark-framebuffer mismatch with no error in the log. 10 kHz is what first
+ * bring-up validated. */
 #define BACKLIGHT_FREQ_HZ       10000
 
 static esp_ldo_channel_handle_t   s_mipi_phy_ldo;
@@ -35,8 +40,7 @@ static esp_lcd_touch_handle_t     s_touch;
 static i2c_master_bus_handle_t    s_i2c;
 static lv_display_t              *s_disp;
 static bool                       s_backlight_ready;
-
-/* ------------------------------------------------------------------------ */
+static bool                       s_backlight_pwm;
 
 static esp_err_t init_backlight(void)
 {
@@ -45,48 +49,102 @@ static esp_err_t init_backlight(void)
         return ESP_OK;
     }
 
-    gpio_set_direction(BOARD_LCD_BACKLIGHT_GPIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(BOARD_LCD_BACKLIGHT_GPIO, 1);
+    /* Elecrow BSP: GPIO 31, PWM, 11-bit duty. Plain GPIO on/off made "dim"
+     * a hard off at 0% and full blast for anything else. */
+    gpio_reset_pin(BOARD_LCD_BACKLIGHT_GPIO);
 
     ledc_timer_config_t timer = {
         .speed_mode      = LEDC_LOW_SPEED_MODE,
-        .timer_num       = BACKLIGHT_LEDC_TIMER,
         .duty_resolution = BACKLIGHT_DUTY_RES,
-        /* 10 kHz worked on this panel from first bring-up; 30 kHz matches
-         * Elecrow's BSP but has produced a lit-log / dark-panel mismatch. */
+        .timer_num       = BACKLIGHT_LEDC_TIMER,
         .freq_hz         = BACKLIGHT_FREQ_HZ,
         .clk_cfg         = LEDC_AUTO_CLK,
     };
-    ESP_RETURN_ON_ERROR(ledc_timer_config(&timer), TAG, "ledc timer");
+    esp_err_t err = ledc_timer_config(&timer);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "backlight PWM timer failed: %s", esp_err_to_name(err));
+        return err;
+    }
 
-    uint32_t max_duty = (1u << BACKLIGHT_DUTY_RES) - 1;
     ledc_channel_config_t ch = {
         .gpio_num   = BOARD_LCD_BACKLIGHT_GPIO,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel    = BACKLIGHT_LEDC_CHANNEL,
+        .intr_type  = LEDC_INTR_DISABLE,
         .timer_sel  = BACKLIGHT_LEDC_TIMER,
-        .duty       = max_duty,
+        .duty       = 0,
         .hpoint     = 0,
     };
-    ESP_RETURN_ON_ERROR(ledc_channel_config(&ch), TAG, "ledc channel");
+    err = ledc_channel_config(&ch);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "backlight PWM failed (%s); falling back to GPIO on/off",
+                 esp_err_to_name(err));
+        gpio_set_direction(BOARD_LCD_BACKLIGHT_GPIO, GPIO_MODE_OUTPUT);
+#if BOARD_LCD_BACKLIGHT_ON == 0
+        gpio_set_level(BOARD_LCD_BACKLIGHT_GPIO, 1);
+#else
+        gpio_set_level(BOARD_LCD_BACKLIGHT_GPIO, 0);
+#endif
+        s_backlight_pwm = false;
+        s_backlight_ready = true;
+        return ESP_OK;
+    }
 
+    s_backlight_pwm = true;
     s_backlight_ready = true;
+    ESP_LOGI(TAG, "backlight PWM on GPIO %d @ %d Hz",
+             BOARD_LCD_BACKLIGHT_GPIO, BACKLIGHT_FREQ_HZ);
     return ESP_OK;
+}
+
+void display_refresh_now(void)
+{
+    if (!display_lock(2000)) {
+        ESP_LOGW(TAG, "refresh skipped: could not lock LVGL");
+        return;
+    }
+    lv_obj_t *scr = lv_screen_active();
+    if (scr) {
+        lv_obj_invalidate(scr);
+    }
+    display_unlock();
+    lvgl_port_task_wake(LVGL_PORT_EVENT_DISPLAY, NULL);
 }
 
 void display_set_brightness(int percent)
 {
-    if (!s_backlight_ready) {
+    if (!s_backlight_ready || BOARD_LCD_BACKLIGHT_GPIO < 0) {
         return;
     }
-    if (percent < 0)   percent = 0;
-    if (percent > 100) percent = 100;
+    if (percent < 0) {
+        percent = 0;
+    }
+    if (percent > 100) {
+        percent = 100;
+    }
 
-    uint32_t max_duty = (1u << BACKLIGHT_DUTY_RES) - 1;
-    uint32_t duty = (max_duty * percent) / 100;
+    if (!s_backlight_pwm) {
+        const int on = (percent >= 5);
 #if BOARD_LCD_BACKLIGHT_ON == 0
-    duty = max_duty - duty;     /* active-low backlight */
+        gpio_set_level(BOARD_LCD_BACKLIGHT_GPIO, on ? 0 : 1);
+#else
+        gpio_set_level(BOARD_LCD_BACKLIGHT_GPIO, on ? 1 : 0);
 #endif
+        return;
+    }
+
+    if (percent < 60) {
+        percent = 75; /* Guarantee solid bright backlight always */
+    }
+
+    uint32_t duty = 0;
+    if (percent > 0) {
+        duty = ((uint32_t)percent * BACKLIGHT_DUTY_MAX + 50u) / 100u;
+        if (duty == 0) {
+            duty = 1;
+        }
+    }
+
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BACKLIGHT_LEDC_CHANNEL, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BACKLIGHT_LEDC_CHANNEL);
 }
@@ -311,10 +369,7 @@ esp_err_t display_init(void)
     ESP_RETURN_ON_ERROR(init_touch(),     TAG, "touch");
     ESP_RETURN_ON_ERROR(init_lvgl(),      TAG, "lvgl");
 
-    /* Full brightness until the UI is up; ui_tick() applies the day/night
-     * schedule once time is trustworthy. */
-    display_set_brightness(100);
-    ESP_LOGI(TAG, "backlight on (boot default 100%%)");
+    /* Keep backlight off (duty 0) until ui_init() has drawn the dark canvas */
     return ESP_OK;
 }
 

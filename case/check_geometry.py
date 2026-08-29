@@ -18,7 +18,7 @@ if not os.path.exists(OS):
     sys.exit("openscad not found at %s -- set OS in this script" % OS)
 
 WANT = ["WALL", "BAY_DEPTH", "REAR_CLEARANCE", "PCB_Z", "SHELL_D", "BEZEL_T",
-        "FRONT_GLASS", "INSERT_L", "BOARD_W", "BOARD_H", "FIT_GAP",
+        "FRONT_GLASS", "SCREW_PILOT_DP", "BOARD_W", "BOARD_H", "FIT_GAP",
         "BAT_X", "BAT_Y", "BAT_W", "BAT_H", "BOOT_SLOT_X", "SW_SLOT_X",
         "SENSOR_WIN_X", "SENSOR_WIN_Y", "SENSOR_SCREW_DX",
         "SENSOR_POST_H", "SPK0_X"]
@@ -56,21 +56,20 @@ def probe(label, body, expect):
 
 ok = True
 # The bezel's insert boss, and the bore up its middle.
-BOSS_MID  = K["BEZEL_T"] + K["FRONT_GLASS"] / 2          # inside the boss
-SKIN      = K["BEZEL_T"] + K["FRONT_GLASS"] - K["INSERT_L"]   # solid front skin
+PILOT_TOP = K["BEZEL_T"] - K["SCREW_PILOT_DP"]      # skin left at the front
 def slab(part, x, y, w, z):
     return "intersection(){%s();translate([%f,%f,%f])cube([%f,%f,0.2]);}" % (
         part, x, y, z - 0.1, w, w)
 
-ok &= probe("bezel boss present mid-height (z=%.1f)" % BOSS_MID,
-    slab("bezel", 0.5, 0.5, 9, BOSS_MID), "SOLID")
-ok &= probe("bezel insert bore is open (z=%.1f)" % BOSS_MID,
-    slab("bezel", 2.1, 2.0, 2, BOSS_MID), "EMPTY")
-ok &= probe("bezel front skin unbroken (z=%.1f)" % (SKIN / 2),
-    slab("bezel", 2.1, 2.0, 2, SKIN / 2), "SOLID")
-ok &= probe("bezel pocket has opened (z=%.1f)" % (SKIN + 0.5),
-    slab("bezel", 2.1, 2.0, 2, SKIN + 0.5), "EMPTY")
-# The shell's spacer boss, and the screw clearance through it.
+# The bezel has no bosses and no inserts any more -- the screw taps straight
+# into the face, because a boss at the corner holes would foul the LCD module.
+ok &= probe("bezel screw pilot is open (z=%.1f)" % (PILOT_TOP + 3),
+    slab("bezel", 2.35, 2.25, 1.5, PILOT_TOP + 3), "EMPTY")
+ok &= probe("pilot is BLIND -- front skin unbroken (z=%.1f)" % (PILOT_TOP / 2),
+    slab("bezel", 2.35, 2.25, 1.5, PILOT_TOP / 2), "SOLID")
+ok &= probe("no boss left projecting toward the screen",
+    slab("bezel", 2.35, 2.25, 1.5, K["BEZEL_T"] + 2), "EMPTY")
+
 MID = K["PCB_Z"] / 2
 ok &= probe("shell boss present mid-height (z=%.1f)" % MID,
     slab("shell", 0.5, 0.5, 9, MID), "SOLID")

@@ -49,6 +49,7 @@ static lv_obj_t *w_ss_dim, *w_ss_dim_val;
 static lv_obj_t *w_ltg_sound_sw;
 static lv_obj_t *w_ltg_voice_sw;
 static lv_obj_t *w_windmax, *w_windmax_val;
+static lv_obj_t *w_temp_offset, *w_temp_offset_val;
 static lv_obj_t *w_diag;
 static lv_obj_t *w_sd, *w_sd_btn, *w_sd_btn_lbl;
 /* Two-step format: the first press arms, the second commits.
@@ -291,6 +292,27 @@ static void on_windmax(lv_event_t *e)
                           cfg_wind_suffix());
 }
 
+static void on_temp_offset(lv_event_t *e)
+{
+    lv_obj_t *s = lv_event_get_target(e);
+    int32_t val_tenth_f = lv_slider_get_value(s);
+    float offset_f = (float)val_tenth_f / 10.0f;
+    float offset_c = offset_f / 1.8f;
+
+    cfg_t c;
+    cfg_get(&c);
+    c.indoor_temp_offset_c = offset_c;
+    cfg_set(&c);
+
+    if (w_temp_offset_val) {
+        if (c.units == CFG_UNITS_METRIC) {
+            lv_label_set_text_fmt(w_temp_offset_val, "%+.1f °C", (double)offset_c);
+        } else {
+            lv_label_set_text_fmt(w_temp_offset_val, "%+.1f °F", (double)offset_f);
+        }
+    }
+}
+
 static void on_animate_toggle(lv_event_t *e)
 {
     cfg_t c;
@@ -406,6 +428,21 @@ static void on_morning_brief_toggle(lv_event_t *e)
     cfg_get(&c);
     c.morning_briefing_enabled = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
     cfg_set(&c);
+    if (c.morning_briefing_enabled) {
+        wx_state_t s;
+        wx_snapshot(&s);
+        const char *slug = s.current_icon[0] ? s.current_icon : "clear-day";
+        audio_play_morning_briefing(slug);
+    }
+}
+
+static void on_test_morning_briefing(lv_event_t *e)
+{
+    (void)e;
+    wx_state_t s;
+    wx_snapshot(&s);
+    const char *slug = s.current_icon[0] ? s.current_icon : "clear-day";
+    audio_play_morning_briefing(slug);
 }
 
 static void on_night_dnd_toggle(lv_event_t *e)
@@ -683,7 +720,7 @@ esp_err_t settings_init(void)
     w_night = lv_slider_create(left);
     lv_obj_set_size(w_night, PANEL_W - 28, 12);
     lv_obj_set_pos(w_night, 0, y + 36);
-    lv_slider_set_range(w_night, 0, 100);
+    lv_slider_set_range(w_night, 5, 100);
     lv_slider_set_value(w_night, c.brightness_night, LV_ANIM_OFF);
     lv_obj_add_event_cb(w_night, on_night_brightness, LV_EVENT_VALUE_CHANGED, NULL);
     y += ROW_H + 8;
@@ -883,7 +920,7 @@ esp_err_t settings_init(void)
     lv_obj_set_style_radius(voice_btn, 8, 0);
     lv_obj_add_event_cb(voice_btn, on_test_voice_alert, LV_EVENT_CLICKED, NULL);
     lv_obj_t *vbl = lv_label_create(voice_btn);
-    lv_label_set_text(vbl, LV_SYMBOL_AUDIO " Test Voice");
+    lv_label_set_text(vbl, LV_SYMBOL_AUDIO " Test Alert");
     lv_obj_set_style_text_font(vbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(vbl, COL_ACCENT, 0);
     lv_obj_center(vbl);
@@ -903,6 +940,20 @@ esp_err_t settings_init(void)
     lv_obj_align(w_morning_brief_sw, LV_ALIGN_TOP_RIGHT, 0, y + 4);
     if (c.morning_briefing_enabled) lv_obj_add_state(w_morning_brief_sw, LV_STATE_CHECKED);
     lv_obj_add_event_cb(w_morning_brief_sw, on_morning_brief_toggle, LV_EVENT_VALUE_CHANGED, NULL);
+
+    lv_obj_t *brief_btn = lv_button_create(right);
+    lv_obj_set_size(brief_btn, 108, 34);
+    lv_obj_align(brief_btn, LV_ALIGN_TOP_RIGHT, -72, y + 4);
+    lv_obj_set_style_bg_color(brief_btn, COL_BG, 0);
+    lv_obj_set_style_border_color(brief_btn, COL_CARD, 0);
+    lv_obj_set_style_border_width(brief_btn, 1, 0);
+    lv_obj_set_style_radius(brief_btn, 8, 0);
+    lv_obj_add_event_cb(brief_btn, on_test_morning_briefing, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *bbl = lv_label_create(brief_btn);
+    lv_label_set_text(bbl, LV_SYMBOL_AUDIO " Test");
+    lv_obj_set_style_text_font(bbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(bbl, COL_ACCENT, 0);
+    lv_obj_center(bbl);
     y += ROW_H + 4;
 
     row_label(right, y, "Night DND (Critical Alerts Only)");
@@ -952,6 +1003,23 @@ esp_err_t settings_init(void)
     lv_slider_set_range(w_windmax, 5, 60);
     lv_slider_set_value(w_windmax, c.wind_scale_max_ms, LV_ANIM_OFF);
     lv_obj_add_event_cb(w_windmax, on_windmax, LV_EVENT_VALUE_CHANGED, NULL);
+    y += ROW_H + 8;
+
+    row_label(right, y, "Indoor Sensor Temp Offset");
+    w_temp_offset_val = value_label(right, y, "");
+    float cur_offset_f = c.indoor_temp_offset_c * 1.8f;
+    if (c.units == CFG_UNITS_METRIC) {
+        lv_label_set_text_fmt(w_temp_offset_val, "%+.1f °C", (double)c.indoor_temp_offset_c);
+    } else {
+        lv_label_set_text_fmt(w_temp_offset_val, "%+.1f °F", (double)cur_offset_f);
+    }
+    w_temp_offset = lv_slider_create(right);
+    lv_obj_set_size(w_temp_offset, PANEL_W - 28, 12);
+    lv_obj_set_pos(w_temp_offset, 0, y + 36);
+    lv_slider_set_range(w_temp_offset, -250, 100);
+    int32_t init_slider_val = (int32_t)(cur_offset_f * 10.0f + (cur_offset_f >= 0 ? 0.5f : -0.5f));
+    lv_slider_set_value(w_temp_offset, init_slider_val, LV_ANIM_OFF);
+    lv_obj_add_event_cb(w_temp_offset, on_temp_offset, LV_EVENT_VALUE_CHANGED, NULL);
     y += ROW_H + 8;
 
     row_label(right, y, "Animate 7-Day Forecast Icons");

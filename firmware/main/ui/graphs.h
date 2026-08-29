@@ -27,3 +27,6 @@ void      graphs_hide(void);
 void graphs_tick(void);
 
 bool graphs_is_visible(void);
+
+/* Force a redraw on the next tick (e.g. after REST history backfill). */
+void graphs_request_redraw(void);

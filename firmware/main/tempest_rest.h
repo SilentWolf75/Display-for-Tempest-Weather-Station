@@ -25,6 +25,10 @@ esp_err_t tempest_rest_backfill_history(void);
  * waiting out the first poll interval. */
 esp_err_t tempest_rest_fetch_now(void);
 
+/* Called when UDP or SNTP first sets a trustworthy wall clock. Retries the
+ * one-shot history backfill that may have been skipped at boot. */
+void tempest_rest_on_clock_sync(void);
+
 /* Returns the Tempest device_id (0 until discovered). */
 int tempest_rest_device_id(void);
 

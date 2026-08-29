@@ -25,6 +25,7 @@ typedef struct {
 static bucket_t         *s_ring;        /* HIST_BUCKETS, PSRAM */
 static int               s_head;        /* index of the newest bucket */
 static int               s_count;       /* buckets holding data */
+static bool              s_backfill_mode;
 static SemaphoreHandle_t s_lock;
 
 #define LOCK()    xSemaphoreTake(s_lock, portMAX_DELAY)
@@ -69,7 +70,7 @@ void history_add(int64_t epoch, float temp_c, float humidity_pct,
      * timestamp and scramble the ordering. This matters because the REST
      * backfill and the live UDP feed can overlap at startup -- whichever wins,
      * the buffer stays monotonic. */
-    if (b && start < b->bucket_start) {
+    if (!s_backfill_mode && b && start < b->bucket_start) {
         UNLOCK();
         return;
     }
@@ -180,6 +181,25 @@ bool history_get_secondary(hist_series_t series, float *out, int out_len)
 bool history_is_plottable(void)
 {
     return s_count >= 2;
+}
+
+void history_begin_backfill(void)
+{
+    LOCK();
+    s_backfill_mode = true;
+    s_head  = -1;
+    s_count = 0;
+    if (s_ring) {
+        memset(s_ring, 0, HIST_BUCKETS * sizeof(bucket_t));
+    }
+    UNLOCK();
+}
+
+void history_end_backfill(void)
+{
+    LOCK();
+    s_backfill_mode = false;
+    UNLOCK();
 }
 
 void history_span(int64_t *oldest, int64_t *newest)

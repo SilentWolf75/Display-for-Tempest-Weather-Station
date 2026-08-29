@@ -3,8 +3,6 @@
 #include "wx_state.h"
 #include "wx_astronomy.h"
 #include "config.h"
-#include "audio.h"
-#include "wx_icons.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -18,76 +16,76 @@
 static const char *TAG = "page2";
 
 #define COL_BG          lv_color_hex(0x06090E)
-#define COL_CARD        lv_color_hex(0x0F141C)
-#define COL_BORDER      lv_color_hex(0x1B2432)
+#define COL_CARD        lv_color_hex(0x0A0F1D)
+#define COL_BORDER      lv_color_hex(0x1B243B)
 #define COL_TEXT        lv_color_hex(0xF8FAFC)
 #define COL_DIM         lv_color_hex(0x94A3B8)
-#define COL_MOON        lv_color_hex(0xCFD8DC)
-#define COL_AMBER       lv_color_hex(0xFFAB40)
-#define COL_RED         lv_color_hex(0xFF5252)
-#define COL_ALERT       lv_color_hex(0xFF1744)
-#define COL_OK          lv_color_hex(0x00E676)
-#define COL_RAIN        lv_color_hex(0x29B6F6)
-#define COL_AQI_GOOD    lv_color_hex(0x4CAF50)
-#define COL_AQI_MOD     lv_color_hex(0xFDD835)
-#define COL_AQI_USG     lv_color_hex(0xFB8C00)
-#define COL_AQI_BAD     lv_color_hex(0xE53935)
+#define COL_FAINT       lv_color_hex(0x475569)
+
+/* Night Theme / Celestial Palette */
+#define COL_MOON_ACCENT lv_color_hex(0x818CF8) /* Twilight Indigo Top Glow */
+#define COL_MOON_TITLE  lv_color_hex(0xC7D2FE) /* Ethereal Moonlight Silver */
+#define COL_MOON_ARC    lv_color_hex(0x93C5FD) /* Soft Moonlight Ice Blue */
+#define COL_MOON_MARKER lv_color_hex(0xF8FAFC) /* Bright White Moon Marker */
+#define COL_MOON_AURA   lv_color_hex(0x6366F1) /* Soft Indigo Celestial Glow */
+#define COL_MOON_PCT    lv_color_hex(0xA5B4FC) /* Soft Moonlight text */
+
+#define COL_RAIN        lv_color_hex(0x38BDF8)
+#define COL_AMBER       lv_color_hex(0xFBBF24)
+#define COL_RED         lv_color_hex(0xF87171)
+#define COL_GOLD_SOFT   lv_color_hex(0xFFAB40)
 
 #define SCR_W           1024
 #define SCR_H           600
-#define LIGHTNING_NEAR_KM  9.656f   /* 6 miles */
+#define PAD             10
 
-typedef enum {
-    RAIN_VIEW_TODAY = 0,
-    RAIN_VIEW_7D,
-    RAIN_VIEW_MONTH,
-    RAIN_VIEW_YTD,
-    RAIN_VIEW_COUNT,
-} rain_view_t;
+#define HEADER_H        50
+#define MOON_PANEL_Y    HEADER_H
+#define MOON_PANEL_H    228
+#define HOURLY_PANEL_Y  (MOON_PANEL_Y + MOON_PANEL_H + 8)
+#define HOURLY_PANEL_H  (SCR_H - HOURLY_PANEL_Y - PAD)
+
+#define ARC_X0          28
+#define ARC_W           500
+#define ARC_Y_BASE      142
+#define ARC_H           58
+#define MOON_MAX_ALT    65.0f
+
+#define SIDEBAR_X       560
+#define MOON_ICON_SIZE  88
+#define MOON_SYNODIC    29.530588853f
+
+static lv_color32_t s_moon_buf[MOON_ICON_SIZE * MOON_ICON_SIZE];
+static float s_moon_drawn_age = -1.0f;
 
 static lv_obj_t *s_screen;
 static lv_obj_t *s_prev_screen;
 static lv_obj_t *s_standby_overlay;
 static lv_obj_t *s_standby_clock;
+static lv_obj_t *s_subtitle;
 
 static lv_obj_t *s_moon_title;
+static lv_obj_t *s_moon_alt_lbl;
 static lv_obj_t *s_moon_phase_lbl;
 static lv_obj_t *s_moon_pct_lbl;
 static lv_obj_t *s_moon_rise_lbl;
 static lv_obj_t *s_moon_set_lbl;
-static lv_obj_t *s_moon_icon;
+static lv_obj_t *s_moon_canvas;
 static lv_obj_t *s_moon_arc_line;
-static lv_point_precise_t s_moon_arc_pts[17];
+static lv_point_precise_t s_moon_arc_pts[25];
+static lv_obj_t *s_peak_line;
+static lv_point_precise_t s_peak_pts[2];
+static lv_obj_t *s_arc_rise_lbl;
+static lv_obj_t *s_arc_peak_lbl;
+static lv_obj_t *s_arc_set_lbl;
+static lv_obj_t *s_moon_marker_glow;
 static lv_obj_t *s_moon_marker;
-
-static lv_obj_t *s_ltg_card;
-static lv_obj_t *s_ltg_detail;
-static lv_obj_t *s_ltg_status;
-
-static lv_obj_t *s_rain_card;
-static lv_obj_t *s_rain_val;
-static lv_obj_t *s_rain_cap;
-
-static lv_obj_t *s_aqi_card;
-static lv_obj_t *s_aqi_bars[5];
-static lv_obj_t *s_aqi_val;
-static lv_obj_t *s_aqi_cat;
+static lv_obj_t *s_moon_now_lbl;
 
 static lv_obj_t *s_hourly_chart;
-static lv_chart_series_t *s_hourly_temp;
 static lv_chart_series_t *s_hourly_pop;
+static lv_chart_series_t *s_hourly_temp;
 static lv_obj_t *s_hourly_note;
-
-static rain_view_t s_rain_view = RAIN_VIEW_TODAY;
-static int64_t     s_last_chime_strike;
-
-static lv_color_t aqi_color(int aqi)
-{
-    if (aqi <= 50)  return COL_AQI_GOOD;
-    if (aqi <= 100) return COL_AQI_MOD;
-    if (aqi <= 150) return COL_AQI_USG;
-    return COL_AQI_BAD;
-}
 
 static void set_text(lv_obj_t *lbl, const char *fmt, ...)
 {
@@ -99,27 +97,255 @@ static void set_text(lv_obj_t *lbl, const char *fmt, ...)
     lv_label_set_text(lbl, buf);
 }
 
-static lv_obj_t *make_card(lv_obj_t *parent, int x, int y, int w, int h,
-                           lv_color_t accent)
+static lv_obj_t *make_card(lv_obj_t *parent, int x, int y, int w, int h, lv_color_t glow)
 {
     lv_obj_t *c = lv_obj_create(parent);
     lv_obj_set_pos(c, x, y);
     lv_obj_set_size(c, w, h);
     lv_obj_set_style_bg_color(c, COL_CARD, 0);
     lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(c, accent, 0);
-    lv_obj_set_style_border_width(c, 2, 0);
-    lv_obj_set_style_border_side(c, LV_BORDER_SIDE_LEFT, 0);
-    lv_obj_set_style_radius(c, 10, 0);
-    lv_obj_set_style_pad_all(c, 8, 0);
+    lv_obj_set_style_border_color(c, COL_BORDER, 0);
+    lv_obj_set_style_border_width(c, 1, 0);
+    lv_obj_set_style_radius(c, 12, 0);
+    lv_obj_set_style_pad_all(c, 12, 0);
+    lv_obj_add_flag(c, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
     lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *accent = lv_obj_create(c);
+    lv_obj_set_pos(accent, 0, 0);
+    lv_obj_set_size(accent, w, 2);
+    lv_obj_set_style_bg_color(accent, glow, 0);
+    lv_obj_set_style_bg_opa(accent, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(accent, 0, 0);
+    lv_obj_clear_flag(accent, LV_OBJ_FLAG_SCROLLABLE);
     return c;
 }
 
-static void on_rain_tap(lv_event_t *e)
+static lv_obj_t *section_title(lv_obj_t *parent, lv_color_t color, const char *txt)
 {
-    (void)e;
-    s_rain_view = (rain_view_t)((s_rain_view + 1) % RAIN_VIEW_COUNT);
+    lv_obj_t *l = lv_label_create(parent);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(l, color, 0);
+    lv_label_set_text(l, txt);
+    return l;
+}
+
+/* Photorealistic 3D spherical lunar shader with Lambertian + Lommel-Seeliger scattering,
+ * authentic lunar maria, Tycho crater rays, and soft terminator penumbra. */
+static void moon_phase_render(int64_t epoch)
+{
+    wx_moon_info_t mi;
+    wx_moon_compute(epoch, &mi);
+
+    if (s_moon_drawn_age >= 0.0f &&
+        fabsf(mi.age_days - s_moon_drawn_age) < 0.05f) {
+        return;
+    }
+    s_moon_drawn_age = mi.age_days;
+
+    const int size = MOON_ICON_SIZE;
+    const float cx = (size - 1) * 0.5f;
+    const float cy = cx;
+    const float R  = size * 0.44f;
+    const float phi = (mi.age_days / MOON_SYNODIC) * 2.0f * (float)M_PI;
+
+    /* Sun light vector: Waxing lit from right (+x), Full lit from front (+z), Waning from left (-x) */
+    const float Lx = sinf(phi);
+    const float Ly = 0.0f;
+    const float Lz = -cosf(phi);
+
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            float dx = ((float)x - cx) / R;
+            float dy = ((float)y - cy) / R;
+            float r = sqrtf(dx * dx + dy * dy);
+
+            if (r > 1.04f) {
+                s_moon_buf[y * size + x] = (lv_color32_t){ .red = 0, .green = 0, .blue = 0, .alpha = 0 };
+                continue;
+            }
+
+            uint8_t alpha = 255;
+            if (r > 0.98f) {
+                alpha = (uint8_t)(255.0f * (1.04f - r) / 0.06f);
+                if (alpha == 0) {
+                    s_moon_buf[y * size + x] = (lv_color32_t){ .red = 0, .green = 0, .blue = 0, .alpha = 0 };
+                    continue;
+                }
+            }
+
+            float nz = sqrtf(fmaxf(0.0f, 1.0f - fminf(1.0f, r * r)));
+            float nx = dx;
+            float ny = dy;
+
+            float lon = atan2f(nx, nz);
+            float lat = asinf(fmaxf(-1.0f, fminf(1.0f, -ny)));
+
+            /* Realistic Lunar Maria */
+            float d_imb   = (lon - (-0.30f))*(lon - (-0.30f)) + (lat - 0.45f)*(lat - 0.45f);
+            float d_proc  = (lon - (-0.55f))*(lon - (-0.55f)) + (lat - 0.15f)*(lat - 0.15f);
+            float d_ser   = (lon - 0.28f)*(lon - 0.28f) + (lat - 0.42f)*(lat - 0.42f);
+            float d_tranq = (lon - 0.42f)*(lon - 0.42f) + (lat - 0.12f)*(lat - 0.12f);
+            float d_cris  = (lon - 0.78f)*(lon - 0.78f) + (lat - 0.28f)*(lat - 0.28f);
+            float d_nub   = (lon - (-0.28f))*(lon - (-0.28f)) + (lat - (-0.38f))*(lat - (-0.38f));
+            float d_hum   = (lon - (-0.58f))*(lon - (-0.58f)) + (lat - (-0.42f))*(lat - (-0.42f));
+            float d_fec   = (lon - 0.58f)*(lon - 0.58f) + (lat - (-0.08f))*(lat - (-0.08f));
+
+            float mare = expf(-d_imb / 0.08f) * 0.38f +
+                         expf(-d_proc / 0.12f) * 0.42f +
+                         expf(-d_ser / 0.05f) * 0.36f +
+                         expf(-d_tranq / 0.07f) * 0.38f +
+                         expf(-d_cris / 0.015f) * 0.42f +
+                         expf(-d_nub / 0.06f) * 0.32f +
+                         expf(-d_hum / 0.035f) * 0.30f +
+                         expf(-d_fec / 0.05f) * 0.32f;
+            if (mare > 0.55f) mare = 0.55f;
+
+            /* Tycho & Copernicus craters */
+            float d_tycho = (lon - (-0.12f))*(lon - (-0.12f)) + (lat - (-0.65f))*(lat - (-0.65f));
+            float r_tycho = sqrtf(d_tycho);
+            float crater_tycho = expf(-(r_tycho - 0.045f)*(r_tycho - 0.045f) / 0.0008f) * 0.25f;
+            float angle_tycho = atan2f(lat - (-0.65f), lon - (-0.12f));
+            float s_ray = sinf(angle_tycho * 7.0f) * 0.5f + 0.5f;
+            float rays_tycho = (s_ray * s_ray * s_ray) * expf(-r_tycho / 0.9f) * 0.28f;
+
+            float d_cop = (lon - (-0.30f))*(lon - (-0.30f)) + (lat - 0.15f)*(lat - 0.15f);
+            float crater_cop = expf(-(sqrtf(d_cop) - 0.035f)*(sqrtf(d_cop) - 0.035f) / 0.0008f) * 0.20f;
+
+            float tex = sinf(lon * 7.0f + lat * 5.0f) * 0.035f +
+                        sinf(lon * 13.0f - lat * 11.0f) * 0.022f +
+                        sinf(lon * 21.0f + lat * 17.0f) * 0.015f;
+
+            float albedo = 0.96f - mare + crater_tycho + rays_tycho + crater_cop + tex;
+            if (albedo < 0.45f) albedo = 0.45f;
+            if (albedo > 1.22f) albedo = 1.22f;
+
+            /* Shading */
+            float ndotl = nx * Lx + ny * Ly + nz * Lz;
+            float t_val = ndotl + (albedo - 0.8f) * 0.04f;
+
+            /* Lommel-Seeliger scattering */
+            float ls_lit = 0.0f;
+            if (t_val > 0.0f) {
+                ls_lit = (t_val / (t_val + nz + 0.001f)) * 1.5f + t_val * 0.3f;
+                if (ls_lit > 1.0f) ls_lit = 1.0f;
+            }
+
+            /* Penumbra smoothstep */
+            float lit_factor = 0.0f;
+            if (t_val > 0.04f) {
+                lit_factor = 1.0f;
+            } else if (t_val > -0.04f) {
+                lit_factor = (t_val - (-0.04f)) / 0.08f;
+                lit_factor = lit_factor * lit_factor * (3.0f - 2.0f * lit_factor);
+            }
+
+            /* Lit colors (Silvery moonlight rock) */
+            float lit_r = fminf(255.0f, 240.0f * albedo * ls_lit);
+            float lit_g = fminf(255.0f, 244.0f * albedo * ls_lit);
+            float lit_b = fminf(255.0f, 252.0f * albedo * ls_lit);
+
+            /* Earthshine / Dark side */
+            float dark_base = 0.12f + 0.03f * albedo;
+            float dark_r = 22.0f * dark_base * 4.0f;
+            float dark_g = 28.0f * dark_base * 4.0f;
+            float dark_b = 45.0f * dark_base * 4.0f;
+
+            s_moon_buf[y * size + x] = (lv_color32_t){
+                .red   = (uint8_t)(lit_r * lit_factor + dark_r * (1.0f - lit_factor)),
+                .green = (uint8_t)(lit_g * lit_factor + dark_g * (1.0f - lit_factor)),
+                .blue  = (uint8_t)(lit_b * lit_factor + dark_b * (1.0f - lit_factor)),
+                .alpha = alpha
+            };
+        }
+    }
+
+    if (s_moon_canvas) {
+        lv_obj_invalidate(s_moon_canvas);
+    }
+}
+
+static void format_time(char *buf, size_t len, int64_t epoch)
+{
+    if (epoch <= 0) {
+        snprintf(buf, len, "--:--");
+        return;
+    }
+    struct tm lt;
+    time_t t = (time_t)epoch;
+    localtime_r(&t, &lt);
+    strftime(buf, len, "%I:%M %p", &lt);
+    if (buf[0] == '0') {
+        memmove(buf, buf + 1, strlen(buf));
+    }
+}
+
+static void get_active_moon_transit(int64_t now, int64_t rise, int64_t set,
+                                   int64_t *out_rise, int64_t *out_set)
+{
+    if (rise <= 0 || set <= 0) {
+        *out_rise = rise;
+        *out_set = set;
+        return;
+    }
+
+    if (set < rise) {
+        /* Moonset is in early morning, Moonrise is in the evening */
+        if (now <= set) {
+            /* Early morning: transit rose yesterday evening and sets this morning */
+            *out_rise = set - 45000; /* ~12.5 h transit duration */
+            *out_set  = set;
+        } else {
+            /* Daytime / Night: transit rises tonight and sets tomorrow morning */
+            *out_rise = rise;
+            *out_set  = rise + 45000;
+        }
+    } else {
+        /* Standard same-day rise < set */
+        *out_rise = rise;
+        *out_set  = set;
+    }
+}
+
+static float moon_path_fraction(int64_t epoch, int64_t rise, int64_t set)
+{
+    int64_t ar = 0, as = 0;
+    get_active_moon_transit(epoch, rise, set, &ar, &as);
+    if (ar <= 0 || as <= 0) {
+        return 0.5f;
+    }
+    int64_t span = as - ar;
+    if (span <= 0) {
+        return 0.5f;
+    }
+    if (epoch < ar) {
+        return -1.0f;
+    }
+    if (epoch > as) {
+        return 2.0f;
+    }
+    return (float)(epoch - ar) / (float)span;
+}
+
+static float moon_altitude_deg(int64_t epoch, int64_t rise, int64_t set)
+{
+    float f = moon_path_fraction(epoch, rise, set);
+    if (f < 0.0f || f > 1.0f) {
+        return 0.0f;
+    }
+    return sinf(f * (float)M_PI) * MOON_MAX_ALT;
+}
+
+static void arc_point_at(float f, int *x, int *y)
+{
+    if (f < 0.0f) {
+        f = 0.0f;
+    }
+    if (f > 1.0f) {
+        f = 1.0f;
+    }
+    *x = ARC_X0 + (int)(f * ARC_W);
+    *y = ARC_Y_BASE - (int)(sinf(f * (float)M_PI) * ARC_H);
 }
 
 static void build_standby_overlay(void)
@@ -135,7 +361,7 @@ static void build_standby_overlay(void)
 
     s_standby_clock = lv_label_create(s_standby_overlay);
     lv_obj_set_style_text_font(s_standby_clock, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(s_standby_clock, COL_AMBER, 0);
+    lv_obj_set_style_text_color(s_standby_clock, COL_GOLD_SOFT, 0);
     lv_label_set_text(s_standby_clock, "--:--");
     lv_obj_center(s_standby_clock);
 
@@ -148,149 +374,144 @@ static void build_standby_overlay(void)
 
 static void build_moon_panel(void)
 {
-    lv_obj_t *card = make_card(s_screen, 10, 48, SCR_W - 20, 200, COL_MOON);
+    lv_obj_t *card = make_card(s_screen, PAD, MOON_PANEL_Y, SCR_W - 2 * PAD, MOON_PANEL_H, COL_MOON_ACCENT);
 
-    s_moon_title = lv_label_create(card);
-    lv_obj_set_style_text_font(s_moon_title, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_moon_title, COL_MOON, 0);
-    lv_label_set_text(s_moon_title, "LUNAR ARC & NIGHT SKY");
-    lv_obj_align(s_moon_title, LV_ALIGN_TOP_LEFT, 0, 0);
+    s_moon_title = section_title(card, COL_MOON_TITLE, "MOON PATH TONIGHT");
+    lv_obj_align(s_moon_title, LV_ALIGN_TOP_LEFT, 0, 2);
 
-    s_moon_icon = wx_icon_create(card, 72, false);
-    if (s_moon_icon) {
-        lv_obj_align(s_moon_icon, LV_ALIGN_TOP_LEFT, 8, 28);
-    }
-
-    const int arc_w = 520;
-    const int arc_x0 = 120;
-    const int arc_y_base = 120;
-    const int arc_h = 36;
-    for (int i = 0; i <= 16; i++) {
-        float f = (float)i / 16.0f;
-        s_moon_arc_pts[i].x = arc_x0 + (int)(f * arc_w);
-        s_moon_arc_pts[i].y = arc_y_base - (int)(sinf(f * (float)M_PI) * arc_h);
+    for (int i = 0; i <= 24; i++) {
+        float f = (float)i / 24.0f;
+        int x, y;
+        arc_point_at(f, &x, &y);
+        s_moon_arc_pts[i].x = x;
+        s_moon_arc_pts[i].y = y;
     }
     s_moon_arc_line = lv_line_create(card);
-    lv_line_set_points(s_moon_arc_line, s_moon_arc_pts, 17);
-    lv_obj_set_style_line_width(s_moon_arc_line, 2, 0);
-    lv_obj_set_style_line_color(s_moon_arc_line, COL_MOON, 0);
-    lv_obj_set_style_line_opa(s_moon_arc_line, LV_OPA_60, 0);
+    lv_line_set_points(s_moon_arc_line, s_moon_arc_pts, 25);
+    lv_obj_set_style_line_width(s_moon_arc_line, 3, 0);
+    lv_obj_set_style_line_color(s_moon_arc_line, COL_MOON_ARC, 0);
+    lv_obj_set_style_line_opa(s_moon_arc_line, LV_OPA_80, 0);
+    lv_obj_set_style_line_rounded(s_moon_arc_line, true, 0);
+
+    int peak_x, peak_y0;
+    arc_point_at(0.5f, &peak_x, &peak_y0);
+    s_peak_pts[0].x = peak_x;
+    s_peak_pts[0].y = peak_y0;
+    s_peak_pts[1].x = peak_x;
+    s_peak_pts[1].y = ARC_Y_BASE + 14;
+    s_peak_line = lv_line_create(card);
+    lv_line_set_points(s_peak_line, s_peak_pts, 2);
+    lv_obj_set_style_line_width(s_peak_line, 1, 0);
+    lv_obj_set_style_line_color(s_peak_line, COL_FAINT, 0);
+    lv_obj_set_style_line_opa(s_peak_line, LV_OPA_50, 0);
+    lv_obj_set_style_line_dash_width(s_peak_line, 4, 0);
+    lv_obj_set_style_line_dash_gap(s_peak_line, 4, 0);
+
+    s_arc_rise_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(s_arc_rise_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_arc_rise_lbl, COL_DIM, 0);
+    lv_label_set_text(s_arc_rise_lbl, "--:--");
+    lv_obj_set_pos(s_arc_rise_lbl, ARC_X0 - 4, ARC_Y_BASE + 4);
+
+    s_arc_peak_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(s_arc_peak_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_arc_peak_lbl, COL_DIM, 0);
+    lv_label_set_text(s_arc_peak_lbl, "--:--");
+    lv_obj_set_pos(s_arc_peak_lbl, peak_x - 28, ARC_Y_BASE + 4);
+
+    s_arc_set_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(s_arc_set_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_arc_set_lbl, COL_DIM, 0);
+    lv_label_set_text(s_arc_set_lbl, "--:--");
+    lv_obj_set_pos(s_arc_set_lbl, ARC_X0 + ARC_W - 48, ARC_Y_BASE + 4);
+
+    s_moon_marker_glow = lv_obj_create(card);
+    lv_obj_set_size(s_moon_marker_glow, 24, 24);
+    lv_obj_set_style_radius(s_moon_marker_glow, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_moon_marker_glow, COL_MOON_AURA, 0);
+    lv_obj_set_style_bg_opa(s_moon_marker_glow, LV_OPA_40, 0);
+    lv_obj_set_style_border_width(s_moon_marker_glow, 0, 0);
 
     s_moon_marker = lv_obj_create(card);
-    lv_obj_set_size(s_moon_marker, 14, 14);
+    lv_obj_set_size(s_moon_marker, 10, 10);
     lv_obj_set_style_radius(s_moon_marker, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_moon_marker, COL_MOON, 0);
+    lv_obj_set_style_bg_color(s_moon_marker, COL_MOON_MARKER, 0);
     lv_obj_set_style_border_width(s_moon_marker, 0, 0);
+    lv_obj_set_style_shadow_color(s_moon_marker, COL_MOON_ARC, 0);
+    lv_obj_set_style_shadow_width(s_moon_marker, 10, 0);
+    lv_obj_set_style_shadow_opa(s_moon_marker, LV_OPA_60, 0);
+
+    s_moon_now_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(s_moon_now_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_moon_now_lbl, COL_MOON_ARC, 0);
+    lv_label_set_text(s_moon_now_lbl, "Now");
+
+    lv_obj_t *divider = lv_obj_create(card);
+    lv_obj_set_size(divider, 1, MOON_PANEL_H - 36);
+    lv_obj_set_pos(divider, SIDEBAR_X - 12, 16);
+    lv_obj_set_style_bg_color(divider, COL_BORDER, 0);
+    lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(divider, 0, 0);
+
+    s_moon_alt_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(s_moon_alt_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_moon_alt_lbl, COL_DIM, 0);
+    lv_label_set_text(s_moon_alt_lbl, "Currently --° above horizon");
+    lv_obj_set_pos(s_moon_alt_lbl, SIDEBAR_X, 0);
+    lv_obj_set_width(s_moon_alt_lbl, 420);
+    lv_label_set_long_mode(s_moon_alt_lbl, LV_LABEL_LONG_WRAP);
+
+    s_moon_canvas = lv_canvas_create(card);
+    lv_obj_set_size(s_moon_canvas, MOON_ICON_SIZE, MOON_ICON_SIZE);
+    lv_obj_set_pos(s_moon_canvas, SIDEBAR_X, 24);
+    lv_obj_set_style_bg_opa(s_moon_canvas, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_moon_canvas, 0, 0);
+    lv_canvas_set_buffer(s_moon_canvas, s_moon_buf, MOON_ICON_SIZE, MOON_ICON_SIZE,
+                         LV_COLOR_FORMAT_ARGB8888);
+    moon_phase_render((int64_t)time(NULL));
 
     s_moon_phase_lbl = lv_label_create(card);
-    lv_obj_set_style_text_font(s_moon_phase_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_moon_phase_lbl, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_moon_phase_lbl, COL_TEXT, 0);
-    lv_label_set_text(s_moon_phase_lbl, "Waxing Gibbous");
-    lv_obj_set_pos(s_moon_phase_lbl, 680, 36);
+    lv_label_set_text(s_moon_phase_lbl, "Full moon");
+    lv_obj_set_pos(s_moon_phase_lbl, SIDEBAR_X + MOON_ICON_SIZE + 18, 26);
 
     s_moon_pct_lbl = lv_label_create(card);
-    lv_obj_set_style_text_font(s_moon_pct_lbl, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_moon_pct_lbl, COL_MOON, 0);
-    lv_label_set_text(s_moon_pct_lbl, "88% lit");
-    lv_obj_set_pos(s_moon_pct_lbl, 680, 72);
+    lv_obj_set_style_text_font(s_moon_pct_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_moon_pct_lbl, COL_MOON_PCT, 0);
+    lv_label_set_text(s_moon_pct_lbl, "99% illuminated");
+    lv_obj_set_pos(s_moon_pct_lbl, SIDEBAR_X + MOON_ICON_SIZE + 18, 54);
 
     s_moon_rise_lbl = lv_label_create(card);
     lv_obj_set_style_text_font(s_moon_rise_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_moon_rise_lbl, COL_DIM, 0);
-    lv_label_set_text(s_moon_rise_lbl, "Moonrise --:--");
-    lv_obj_set_pos(s_moon_rise_lbl, 680, 110);
+    lv_label_set_text(s_moon_rise_lbl, "Moonrise  --:--");
+    lv_obj_set_pos(s_moon_rise_lbl, SIDEBAR_X + MOON_ICON_SIZE + 18, 80);
 
     s_moon_set_lbl = lv_label_create(card);
     lv_obj_set_style_text_font(s_moon_set_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_moon_set_lbl, COL_DIM, 0);
-    lv_label_set_text(s_moon_set_lbl, "Moonset --:--");
-    lv_obj_set_pos(s_moon_set_lbl, 680, 134);
-}
-
-static void build_mid_row(void)
-{
-    const int y = 258;
-    const int h = 132;
-    const int w = 328;
-    const int gap = 10;
-
-    s_ltg_card = make_card(s_screen, 10, y, w, h, COL_AMBER);
-    lv_obj_t *lt = lv_label_create(s_ltg_card);
-    lv_obj_set_style_text_font(lt, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(lt, COL_AMBER, 0);
-    lv_label_set_text(lt, "LIGHTNING PROXIMITY");
-    s_ltg_detail = lv_label_create(s_ltg_card);
-    lv_obj_set_style_text_font(s_ltg_detail, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_ltg_detail, COL_TEXT, 0);
-    lv_label_set_text(s_ltg_detail, "No nearby strikes");
-    lv_obj_set_pos(s_ltg_detail, 0, 36);
-    s_ltg_status = lv_label_create(s_ltg_card);
-    lv_obj_set_style_text_font(s_ltg_status, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_ltg_status, COL_DIM, 0);
-    lv_label_set_text(s_ltg_status, "Monitoring...");
-    lv_obj_set_pos(s_ltg_status, 0, 72);
-
-    s_rain_card = make_card(s_screen, 10 + w + gap, y, w, h, COL_RAIN);
-    lv_obj_add_flag(s_rain_card, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_rain_card, on_rain_tap, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *rt = lv_label_create(s_rain_card);
-    lv_obj_set_style_text_font(rt, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(rt, COL_RAIN, 0);
-    lv_label_set_text(rt, "RAIN TOTALS  (tap to cycle)");
-    s_rain_val = lv_label_create(s_rain_card);
-    lv_obj_set_style_text_font(s_rain_val, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_rain_val, COL_TEXT, 0);
-    lv_label_set_text(s_rain_val, "0.00 in");
-    lv_obj_set_pos(s_rain_val, 0, 40);
-    s_rain_cap = lv_label_create(s_rain_card);
-    lv_obj_set_style_text_font(s_rain_cap, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_rain_cap, COL_DIM, 0);
-    lv_label_set_text(s_rain_cap, "Rain Today");
-    lv_obj_set_pos(s_rain_cap, 0, 82);
-
-    s_aqi_card = make_card(s_screen, 10 + 2 * (w + gap), y, w, h, COL_AQI_GOOD);
-    lv_obj_t *at = lv_label_create(s_aqi_card);
-    lv_obj_set_style_text_font(at, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(at, COL_AQI_GOOD, 0);
-    lv_label_set_text(at, "AIR QUALITY (EPA)");
-    lv_color_t cols[5] = { COL_AQI_GOOD, COL_AQI_MOD, COL_AQI_USG, COL_AQI_BAD, COL_AQI_BAD };
-    for (int i = 0; i < 5; i++) {
-        s_aqi_bars[i] = lv_obj_create(s_aqi_card);
-        lv_obj_set_size(s_aqi_bars[i], 52, 10);
-        lv_obj_set_pos(s_aqi_bars[i], i * 58, 36);
-        lv_obj_set_style_bg_color(s_aqi_bars[i], cols[i], 0);
-        lv_obj_set_style_bg_opa(s_aqi_bars[i], LV_OPA_30, 0);
-        lv_obj_set_style_border_width(s_aqi_bars[i], 0, 0);
-        lv_obj_set_style_radius(s_aqi_bars[i], 3, 0);
-    }
-    s_aqi_val = lv_label_create(s_aqi_card);
-    lv_obj_set_style_text_font(s_aqi_val, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_aqi_val, COL_TEXT, 0);
-    lv_label_set_text(s_aqi_val, "AQI --");
-    lv_obj_set_pos(s_aqi_val, 0, 56);
-    s_aqi_cat = lv_label_create(s_aqi_card);
-    lv_obj_set_style_text_font(s_aqi_cat, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_aqi_cat, COL_DIM, 0);
-    lv_label_set_text(s_aqi_cat, "Waiting for reading");
-    lv_obj_set_pos(s_aqi_cat, 0, 92);
+    lv_label_set_text(s_moon_set_lbl, "Moonset  --:--");
+    lv_obj_set_pos(s_moon_set_lbl, SIDEBAR_X + MOON_ICON_SIZE + 18, 104);
 }
 
 static void build_hourly_panel(void)
 {
-    lv_obj_t *card = make_card(s_screen, 10, 400, SCR_W - 20, 188, COL_RAIN);
-    lv_obj_t *ht = lv_label_create(card);
-    lv_obj_set_style_text_font(ht, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(ht, COL_RAIN, 0);
-    lv_label_set_text(ht, "24-HOUR HOURLY TIMELINE");
+    lv_obj_t *card = make_card(s_screen, PAD, HOURLY_PANEL_Y, SCR_W - 2 * PAD, HOURLY_PANEL_H, COL_RAIN);
 
+    lv_obj_t *ht = section_title(card, COL_RAIN, "24-HOUR HOURLY TIMELINE");
+    lv_obj_align(ht, LV_ALIGN_TOP_LEFT, 0, 2);
+
+    const int chart_h = HOURLY_PANEL_H - 62;
     s_hourly_chart = lv_chart_create(card);
-    lv_obj_set_size(s_hourly_chart, SCR_W - 44, 110);
-    lv_obj_set_pos(s_hourly_chart, 0, 28);
+    lv_obj_set_size(s_hourly_chart, SCR_W - 2 * PAD - 24, chart_h);
+    lv_obj_set_pos(s_hourly_chart, 0, 26);
     lv_chart_set_type(s_hourly_chart, LV_CHART_TYPE_BAR);
     lv_chart_set_point_count(s_hourly_chart, WX_HOURLY_SLOTS);
     lv_chart_set_range(s_hourly_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
     lv_obj_set_style_bg_opa(s_hourly_chart, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_hourly_chart, 0, 0);
+    lv_obj_set_style_pad_column(s_hourly_chart, 2, 0);
     s_hourly_pop = lv_chart_add_series(s_hourly_chart, COL_RAIN, LV_CHART_AXIS_PRIMARY_Y);
     s_hourly_temp = lv_chart_add_series(s_hourly_chart, COL_AMBER, LV_CHART_AXIS_SECONDARY_Y);
     lv_chart_set_range(s_hourly_chart, LV_CHART_AXIS_SECONDARY_Y, 0, 100);
@@ -298,8 +519,10 @@ static void build_hourly_panel(void)
     s_hourly_note = lv_label_create(card);
     lv_obj_set_style_text_font(s_hourly_note, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_hourly_note, COL_DIM, 0);
-    lv_label_set_text(s_hourly_note, "Rain probability by hour (bars) with temperature trend");
-    lv_obj_set_pos(s_hourly_note, 0, 148);
+    lv_label_set_text(s_hourly_note, "Rain probability by hour with temperature trend");
+    lv_obj_set_pos(s_hourly_note, 0, 26 + chart_h + 4);
+    lv_obj_set_width(s_hourly_note, SCR_W - 2 * PAD - 24);
+    lv_label_set_long_mode(s_hourly_note, LV_LABEL_LONG_DOT);
 }
 
 esp_err_t page2_init(void)
@@ -313,18 +536,23 @@ esp_err_t page2_init(void)
     lv_obj_t *title = lv_label_create(s_screen);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(title, COL_TEXT, 0);
-    lv_label_set_text(title, "Night & Insights");
-    lv_obj_set_pos(title, 16, 12);
+    lv_label_set_text(title, "Moon & hourly");
+    lv_obj_set_pos(title, 16, 8);
+
+    s_subtitle = lv_label_create(s_screen);
+    lv_obj_set_style_text_font(s_subtitle, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_subtitle, COL_DIM, 0);
+    lv_label_set_text(s_subtitle, "Tonight - --");
+    lv_obj_set_pos(s_subtitle, 18, 34);
 
     ui_create_page_button(s_screen, LV_ALIGN_TOP_RIGHT, -14, 8, UI_PAGE_INSIGHTS);
     ui_attach_swipe_nav(s_screen);
 
     build_moon_panel();
-    build_mid_row();
     build_hourly_panel();
     build_standby_overlay();
 
-    ESP_LOGI(TAG, "insights page built");
+    ESP_LOGI(TAG, "moon & hourly page built");
     return ESP_OK;
 }
 
@@ -355,43 +583,6 @@ bool page2_night_standby_active(void)
            !lv_obj_has_flag(s_standby_overlay, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void format_time(char *buf, size_t len, int64_t epoch)
-{
-    if (epoch <= 0) {
-        snprintf(buf, len, "--:--");
-        return;
-    }
-    struct tm lt;
-    time_t t = (time_t)epoch;
-    localtime_r(&t, &lt);
-    strftime(buf, len, "%I:%M %p", &lt);
-    if (buf[0] == '0') {
-        memmove(buf, buf + 1, strlen(buf));
-    }
-}
-
-static float rain_for_view(const wx_state_t *s, rain_view_t view)
-{
-    switch (view) {
-    case RAIN_VIEW_7D:    return s->rain_7d_mm + s->rain_today_mm;
-    case RAIN_VIEW_MONTH: return s->rain_month_mm + s->rain_today_mm;
-    case RAIN_VIEW_YTD:   return s->rain_ytd_mm + s->rain_today_mm;
-    case RAIN_VIEW_TODAY:
-    default:              return s->rain_today_mm;
-    }
-}
-
-static const char *rain_caption(rain_view_t view)
-{
-    switch (view) {
-    case RAIN_VIEW_7D:    return "Rain Last 7 Days";
-    case RAIN_VIEW_MONTH: return "Rain This Month";
-    case RAIN_VIEW_YTD:   return "Rain Year-to-Date";
-    case RAIN_VIEW_TODAY:
-    default:              return "Rain Today";
-    }
-}
-
 void page2_tick(void)
 {
     if (!page2_is_visible()) {
@@ -415,7 +606,7 @@ void page2_tick(void)
         lv_obj_set_style_bg_color(s_standby_overlay,
             cfg.night_standby_red ? lv_color_hex(0x180404) : lv_color_hex(0x120800), 0);
         lv_obj_set_style_text_color(s_standby_clock,
-            cfg.night_standby_red ? COL_RED : COL_AMBER, 0);
+            cfg.night_standby_red ? COL_RED : COL_GOLD_SOFT, 0);
         char clk[16];
         strftime(clk, sizeof(clk), "%I:%M", &lt);
         if (clk[0] == '0') {
@@ -427,106 +618,84 @@ void page2_tick(void)
     }
     lv_obj_add_flag(s_standby_overlay, LV_OBJ_FLAG_HIDDEN);
 
-    bool lunar_night = wx_is_night_sky(now, s.sunset_epoch,
-                                       s.moonrise_epoch, s.moonset_epoch);
-    lv_label_set_text(s_moon_title,
-                      lunar_night ? "LUNAR ARC & NIGHT SKY" : "SOLAR ARC (DAY)");
-
-    lv_label_set_text(s_moon_phase_lbl, s.moon_phase_name[0] ? s.moon_phase_name : "--");
-    set_text(s_moon_pct_lbl, "%.0f%% lit", (double)(s.moon_illumination * 100.0f));
-    wx_icon_set(s_moon_icon, s.moon_icon[0] ? s.moon_icon : "moon-full");
-
-    char tr[16], ts[16];
-    format_time(tr, sizeof(tr), s.moonrise_epoch);
-    format_time(ts, sizeof(ts), s.moonset_epoch);
-    set_text(s_moon_rise_lbl, "Moonrise %s", tr);
-    set_text(s_moon_set_lbl, "Moonset %s", ts);
-
-    const int arc_w = 520;
-    const int arc_x0 = 120;
-    const int arc_y_base = 120;
-    const int arc_h = 36;
-    float f_moon = s.moon_illumination;
-    if (lunar_night && s.moonrise_epoch > 0 && s.moonset_epoch > 0 && now >= s.moonrise_epoch) {
-        int64_t span = s.moonset_epoch - s.moonrise_epoch;
-        if (span > 0) {
-            f_moon = (float)(now - s.moonrise_epoch) / (float)span;
-        }
-    } else if (!lunar_night && s.sunrise_epoch > 0 && s.sunset_epoch > 0 && now >= s.sunrise_epoch) {
-        int64_t span = s.sunset_epoch - s.sunrise_epoch;
-        if (span > 0 && now <= s.sunset_epoch) {
-            f_moon = (float)(now - s.sunrise_epoch) / (float)span;
-        }
-    }
-    if (f_moon < 0.0f) f_moon = 0.0f;
-    if (f_moon > 1.0f) f_moon = 1.0f;
-    int mx = arc_x0 + (int)(f_moon * arc_w) - 7;
-    int my = arc_y_base - (int)(sinf(f_moon * (float)M_PI) * arc_h) - 7;
-    lv_obj_set_pos(s_moon_marker, mx, my);
-    lv_obj_set_style_line_color(s_moon_arc_line,
-                                lunar_night ? COL_MOON : COL_AMBER, 0);
-
-    /* Lightning proximity */
-    bool near = false;
-    if (s.last_strike_epoch > 0 && s.last_strike_dist_km > 0.0f &&
-        s.last_strike_dist_km <= LIGHTNING_NEAR_KM &&
-        (now - s.last_strike_epoch) < 3 * 3600) {
-        near = true;
-        float dist = cfg_distance(s.last_strike_dist_km);
-        int mins = (int)((now - s.last_strike_epoch) / 60);
-        if (mins < 1) mins = 1;
-        set_text(s_ltg_detail, "Strike %.1f %s away", (double)dist, cfg_distance_suffix());
-        set_text(s_ltg_status, "%d min ago  •  advisory zone", mins);
-        lv_obj_set_style_border_color(s_ltg_card, COL_ALERT, 0);
-        lv_obj_set_style_bg_color(s_ltg_card, lv_color_hex(0x241008), 0);
-        if (s.last_strike_epoch != s_last_chime_strike) {
-            s_last_chime_strike = s.last_strike_epoch;
-            audio_play_chime();
-        }
+    char date_buf[32];
+    strftime(date_buf, sizeof(date_buf), "%A, %b %d", &lt);
+    if (lt.tm_hour >= 18 || lt.tm_hour < 6) {
+        set_text(s_subtitle, "Tonight - %s", date_buf);
     } else {
-        lv_label_set_text(s_ltg_detail, "No strikes within 6 mi");
-        lv_label_set_text(s_ltg_status, "Live detector active");
-        lv_obj_set_style_border_color(s_ltg_card, COL_AMBER, 0);
-        lv_obj_set_style_bg_color(s_ltg_card, COL_CARD, 0);
-    }
-    (void)near;
-
-    /* Rain totals */
-    float rain_mm = rain_for_view(&s, s_rain_view);
-    char rbuf[32];
-    snprintf(rbuf, sizeof(rbuf), "%s %s", cfg_rain_fmt(), cfg_rain_suffix());
-    set_text(s_rain_val, rbuf, (double)cfg_rain(rain_mm));
-    lv_label_set_text(s_rain_cap, rain_caption(s_rain_view));
-
-    /* AQI */
-    if (s.aqi_valid) {
-        set_text(s_aqi_val, "AQI %d", s.aqi_val);
-        set_text(s_aqi_cat, "%s  •  PM2.5 %.1f", wx_aqi_epa_label(s.aqi_val), (double)s.aqi_pm25);
-        lv_color_t ac = aqi_color(s.aqi_val);
-        lv_obj_set_style_border_color(s_aqi_card, ac, 0);
-        int tier = 0;
-        if (s.aqi_val > 50)  tier = 1;
-        if (s.aqi_val > 100) tier = 2;
-        if (s.aqi_val > 150) tier = 3;
-        if (s.aqi_val > 200) tier = 4;
-        for (int i = 0; i < 5; i++) {
-            lv_obj_set_style_bg_opa(s_aqi_bars[i], i <= tier ? LV_OPA_COVER : LV_OPA_30, 0);
-        }
+        set_text(s_subtitle, "Today - %s", date_buf);
     }
 
-    /* Hourly timeline */
+    int64_t rise = s.moonrise_epoch;
+    int64_t set = s.moonset_epoch;
+
+    float alt = wx_moon_altitude_calc(now, 38.8075f, -94.9157f);
+    float f_now = wx_moon_sky_fraction(now, 38.8075f, -94.9157f);
+
+    if (alt > 0.0f) {
+        set_text(s_moon_alt_lbl, "Currently %.0f° above horizon", (double)alt);
+    } else {
+        set_text(s_moon_alt_lbl, "Currently below horizon");
+    }
+
+    const char *phase = s.moon_phase_name[0] ? s.moon_phase_name : "--";
+    set_text(s_moon_phase_lbl, "%s moon", phase);
+    set_text(s_moon_pct_lbl, "%.0f%% illuminated", (double)(s.moon_illumination * 100.0f));
+    moon_phase_render(now);
+
+    char tr[16], ts[16], tp[16];
+    format_time(tr, sizeof(tr), rise);
+    format_time(ts, sizeof(ts), set);
+    if (rise > 0 && set > 0) {
+        int64_t mid = (rise < set) ? (rise + (set - rise) / 2) : (set + 45000 / 2);
+        format_time(tp, sizeof(tp), mid);
+    } else {
+        snprintf(tp, sizeof(tp), "--:--");
+    }
+    lv_label_set_text(s_arc_rise_lbl, tr);
+    lv_label_set_text(s_arc_peak_lbl, tp);
+    lv_label_set_text(s_arc_set_lbl, ts);
+    set_text(s_moon_rise_lbl, "Moonrise  %s", tr);
+    set_text(s_moon_set_lbl, "Moonset  %s", ts);
+
+    int mx, my;
+    arc_point_at(f_now, &mx, &my);
+    if (alt > 0.0f) {
+        lv_obj_clear_flag(s_moon_marker_glow, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_moon_marker, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_moon_now_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(s_moon_marker_glow, mx - 12, my - 12);
+        lv_obj_set_pos(s_moon_marker, mx - 5, my - 5);
+        lv_obj_set_pos(s_moon_now_lbl, mx - 14, my + 10);
+    } else {
+        lv_obj_add_flag(s_moon_marker_glow, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_moon_marker, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_moon_now_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+
     if (s.hourly_valid && s.hourly_count > 0) {
-        lv_chart_set_point_count(s_hourly_chart, s.hourly_count);
+        int count = s.hourly_count;
+        if (count > WX_HOURLY_SLOTS) {
+            count = WX_HOURLY_SLOTS;
+        }
+        lv_chart_set_point_count(s_hourly_chart, count);
+
         float tmin = 100.0f, tmax = -100.0f;
-        for (int i = 0; i < s.hourly_count; i++) {
-            if (s.hourly[i].temp_c < tmin) tmin = s.hourly[i].temp_c;
-            if (s.hourly[i].temp_c > tmax) tmax = s.hourly[i].temp_c;
+        for (int i = 0; i < count; i++) {
+            if (s.hourly[i].temp_c < tmin) {
+                tmin = s.hourly[i].temp_c;
+            }
+            if (s.hourly[i].temp_c > tmax) {
+                tmax = s.hourly[i].temp_c;
+            }
         }
         float trange = tmax - tmin;
-        if (trange < 4.0f) trange = 4.0f;
+        if (trange < 4.0f) {
+            trange = 4.0f;
+        }
 
         int rain_start = -1;
-        for (int i = 0; i < s.hourly_count; i++) {
+        for (int i = 0; i < count; i++) {
             lv_chart_set_value_by_id(s_hourly_chart, s_hourly_pop, i,
                                      s.hourly[i].precip_probability);
             int tnorm = (int)(((s.hourly[i].temp_c - tmin) / trange) * 100.0f);
@@ -539,17 +708,13 @@ void page2_tick(void)
 
         if (rain_start >= 0) {
             char note[80];
-            struct tm ht;
-            time_t ht_t = (time_t)s.hourly[rain_start].hour_epoch;
-            localtime_r(&ht_t, &ht);
             char hr[16];
-            strftime(hr, sizeof(hr), "%I:%M %p", &ht);
-            if (hr[0] == '0') memmove(hr, hr + 1, strlen(hr));
+            format_time(hr, sizeof(hr), s.hourly[rain_start].hour_epoch);
             snprintf(note, sizeof(note), "Rain likely around %s (%d%%)",
                      hr, s.hourly[rain_start].precip_probability);
             lv_label_set_text(s_hourly_note, note);
         } else {
-            lv_label_set_text(s_hourly_note, "No significant rain in the next hours");
+            lv_label_set_text(s_hourly_note, "No significant rain in the next 24 hours");
         }
     }
 }

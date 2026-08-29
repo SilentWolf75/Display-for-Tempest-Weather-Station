@@ -1,4 +1,4 @@
-menu "Tempest Weather Display"
+menu "Display for Tempest Weather Station"
 
     config TEMPEST_NETWORK_ENABLED
         bool "Enable networking (Wi-Fi, forecast, OTA)"
