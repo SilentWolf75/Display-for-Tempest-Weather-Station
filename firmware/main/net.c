@@ -22,6 +22,7 @@ int net_scan(net_ap_t *out, int max_aps) { (void)out; (void)max_aps; return -1; 
 esp_err_t net_apply_credentials(const char *s, const char *p)
 { (void)s; (void)p; return ESP_ERR_NOT_SUPPORTED; }
 const char *net_current_ssid(void) { return ""; }
+bool net_get_ip(char *buf, size_t len) { (void)buf; (void)len; return false; }
 
 #else
 
@@ -340,6 +341,26 @@ int net_scan(net_ap_t *out, int max_aps)
     ESP_LOGI(TAG, "scan found %d network(s) (%u raw records)", written,
              (unsigned)n);
     return written;
+}
+
+bool net_get_ip(char *buf, size_t len)
+{
+    if (!buf || len < 8 || !net_is_connected()) {
+        return false;
+    }
+
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (!netif) {
+        return false;
+    }
+
+    esp_netif_ip_info_t info;
+    if (esp_netif_get_ip_info(netif, &info) != ESP_OK || info.ip.addr == 0) {
+        return false;
+    }
+
+    snprintf(buf, len, IPSTR, IP2STR(&info.ip));
+    return true;
 }
 
 esp_err_t net_apply_credentials(const char *ssid, const char *password)

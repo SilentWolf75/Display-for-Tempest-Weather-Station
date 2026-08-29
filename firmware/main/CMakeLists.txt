@@ -48,4 +48,5 @@ idf_component_register(
         spi_flash
         esp_http_server
         mqtt
+        mdns
 )

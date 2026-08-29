@@ -53,3 +53,7 @@ dependencies:
     ## "esp_lvgl_port" is a different component that nothing depends on, and it
     ## is silently never compiled.
     override_path: "../components/esp_lvgl_port"
+
+  ## mDNS for http://tempest.local (web dashboard hostname).
+  espressif/mdns:
+    version: "*"

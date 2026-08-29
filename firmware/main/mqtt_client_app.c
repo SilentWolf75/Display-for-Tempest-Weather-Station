@@ -139,7 +139,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 {
     (void)handler_args;
     (void)base;
-    esp_mqtt_event_handle_t event = event_data;
+    (void)event_data;
     switch ((esp_mqtt_event_id_t)event_id) {
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG, "connected to broker");

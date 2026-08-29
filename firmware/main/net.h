@@ -41,3 +41,7 @@ const char *net_current_ssid(void);
  * staleness checks are meaningless before this. */
 bool net_time_is_valid(void);
 void net_set_timezone(int tz_idx);
+
+/* Writes the STA IPv4 address as dotted decimal. Returns false when Wi-Fi
+ * is down or DHCP has not assigned an address yet. */
+bool net_get_ip(char *buf, size_t len);

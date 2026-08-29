@@ -243,6 +243,31 @@ INSERT_FIT = -0.1;      // hole is slightly UNDER size; the brass melts its
 // 25 is a size the assortment kit actually contains.
 INSERT_CLEAR = 2.2;
 
+// --- three separate reasons the bezel would not seat -----------------------
+//
+// BEZEL_SEAM / the rim length. The rim used to drop FRONT_GLASS below the
+// bezel face, which put its bottom edge at the PCB's FRONT face. But the shell
+// wall stops at the PCB's BACK face, one board thickness lower -- so the two
+// halves could never meet and there was a gap all the way round of exactly
+// PCB thickness, 1.6 mm. The rim now drops far enough to reach the wall, less
+// a hair so the bezel is still stopped by its face on the glass rather than by
+// rim-on-wall, which would be a four-corner contact and could rock.
+BEZEL_SEAM = 0.2;
+
+// BEZEL_CLAMP. The bezel face lands on the glass at FRONT_GLASS, and the
+// insert bosses landed on the PCB at FRONT_GLASS too -- both bottoming out at
+// the same instant with ZERO margin. Four bosses cannot all be proud by the
+// same amount, so the part rocked. Shortening them puts the stop on the face,
+// which is a large flat plane and cannot rock; the bosses hang clear and only
+// carry the inserts.
+BEZEL_CLAMP = 0.4;
+
+// BEZEL_FIT. The shell needs the board to be a snug fit; the bezel only has to
+// drop over it. Sharing FIT_GAP made the bezel as tight as the shell for no
+// benefit, and printed pockets come out slightly under size. This is that
+// clearance loosened, for the bezel alone.
+BEZEL_FIT = 1.0;
+
 TILT = 18;              // degrees off vertical
 
 // ---------------------------------------------------------------------------
@@ -623,18 +648,20 @@ module bezel() {
             // stand inside the relief, so cutting it afterwards erases them.
             difference() {
                 translate([-FIT_GAP - WALL, -FIT_GAP - WALL, 0])
-                    rounded_box(SHELL_W, SHELL_H, BEZEL_T + FRONT_GLASS, CORNER_R);
-                translate([-FIT_GAP, -FIT_GAP, BEZEL_T])
-                    cube([BOARD_W + 2*FIT_GAP, BOARD_H + 2*FIT_GAP,
-                          FRONT_GLASS + 1]);
+                    rounded_box(SHELL_W, SHELL_H,
+                                BEZEL_T + FRONT_GLASS + PCB_ONLY - BEZEL_SEAM,
+                                CORNER_R);
+                translate([-BEZEL_FIT, -BEZEL_FIT, BEZEL_T])
+                    cube([BOARD_W + 2*BEZEL_FIT, BOARD_H + 2*BEZEL_FIT,
+                          FRONT_GLASS + PCB_ONLY + 1]);
             }
 
-            // Bosses carrying the inserts. They stand down through the glass
-            // relief and land on the PCB at the corners, well clear of the
-            // active area, so they also set how hard the glass is squeezed.
+            // Bosses carrying the inserts, BEZEL_CLAMP shorter than the glass
+            // stands proud so they stop clear of the PCB. See BEZEL_CLAMP.
             for (h = holes)
                 translate([h[0], h[1], BEZEL_T])
-                    cylinder(d=INSERT_D + 3.2, h=FRONT_GLASS, $fn=48);
+                    cylinder(d=INSERT_D + 3.2, h=FRONT_GLASS - BEZEL_CLAMP,
+                             $fn=48);
         }
 
         // The window, with a chamfer opening outward.
@@ -648,7 +675,8 @@ module bezel() {
         // so nothing breaks through and the front stays unmarked.
         for (h = holes)
             translate([h[0], h[1],
-                       BEZEL_T + FRONT_GLASS - INSERT_L - INSERT_CLEAR])
+                       BEZEL_T + FRONT_GLASS - BEZEL_CLAMP
+                       - INSERT_L - INSERT_CLEAR])
                 cylinder(d=INSERT_D + INSERT_FIT,
                          h=INSERT_L + INSERT_CLEAR + 0.2, $fn=32);
     }
@@ -741,13 +769,16 @@ PART = "preview";
 PCB_ONLY   = BOARD_THICK - FRONT_GLASS;             // PCB without the glass
 // Button-head length is measured UNDER the head, so the usable span starts at
 // the bottom of the counterbore rather than at the face of the shell.
-SCREW_MIN  = PCB_Z + PCB_ONLY - SCREW_HEAD_SEAT;    // just reaches the insert
+// + BEZEL_CLAMP: the insert now starts that far above the PCB face, the
+// bosses having been shortened so the bezel seats on the glass.
+SCREW_MIN  = PCB_Z + PCB_ONLY + BEZEL_CLAMP - SCREW_HEAD_SEAT;
 SCREW_MAX  = SCREW_MIN + INSERT_L + INSERT_CLEAR + 0.2;   // bottoms out
 echo(str("M3 BUTTON head (length under the head): at least ", SCREW_MIN,
          " mm to reach the insert, at most ", SCREW_MAX,
          " mm before it bottoms out."));
 echo(str("Bezel front skin over each insert: ",
-         BEZEL_T + FRONT_GLASS - INSERT_L - INSERT_CLEAR, " mm"));
+         BEZEL_T + FRONT_GLASS - BEZEL_CLAMP - INSERT_L - INSERT_CLEAR,
+         " mm"));
 
 if (PART == "shell") shell();
 else if (PART == "foot") foot();

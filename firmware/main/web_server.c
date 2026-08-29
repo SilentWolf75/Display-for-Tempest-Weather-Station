@@ -10,10 +10,50 @@
 
 #include "esp_log.h"
 #include "esp_http_server.h"
+#include "mdns.h"
 #include "cJSON.h"
 
 static const char *TAG = "web_server";
 static httpd_handle_t s_server = NULL;
+static bool           s_mdns_started;
+
+#define WEB_PORT 8080
+
+static esp_err_t mdns_start(void)
+{
+    if (s_mdns_started) {
+        return ESP_OK;
+    }
+
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "mdns init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    mdns_hostname_set("tempest");
+    mdns_instance_name_set("Tempest Weather Display");
+
+    err = mdns_service_add(NULL, "_http", "_tcp", WEB_PORT, NULL, 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mdns service add failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    s_mdns_started = true;
+    ESP_LOGI(TAG, "mdns registered: http://tempest.local:%d", WEB_PORT);
+    return ESP_OK;
+}
+
+static void mdns_stop(void)
+{
+    if (!s_mdns_started) {
+        return;
+    }
+    mdns_service_remove("_http", "_tcp");
+    mdns_free();
+    s_mdns_started = false;
+}
 
 static const char HTML_PAGE[] = 
 "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -66,6 +106,11 @@ static const char HTML_PAGE[] =
 "document.getElementById('aqi_cat').innerText=d.aqi_cat||'EPA Index';"
 "document.getElementById('battery').innerText=d.battery_v.toFixed(2)+' V';"
 "document.getElementById('hub_rssi').innerText='Hub RSSI: '+d.hub_rssi+' dBm';"
+"let st=document.getElementById('station_status');"
+"if(!d.wifi_connected){st.innerText='● No Wi-Fi';st.style.color='var(--alert)';}"
+"else if(d.udp_stale){st.innerText='● No UDP';st.style.color='var(--warn)';}"
+"else if(d.obs_stale){st.innerText='● Stale data';st.style.color='var(--warn)';}"
+"else{st.innerText='● Live';st.style.color='var(--ok)';}"
 "if(d.indoor_valid){document.getElementById('indoor_temp').innerText=d.indoor_temp_f.toFixed(1)+'°F';"
 "document.getElementById('indoor_hum').innerText='Humidity '+d.indoor_humidity.toFixed(0)+'%';}"
 "else{document.getElementById('indoor_temp').innerText='--°';document.getElementById('indoor_hum').innerText='No Grove sensor';}"
@@ -107,8 +152,17 @@ static esp_err_t api_status_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(root, "indoor_temp_f", (double)wx_c_to_f(s.indoor_temp_c));
         cJSON_AddNumberToObject(root, "indoor_humidity", (double)s.indoor_humidity_pct);
     }
-    cJSON_AddBoolToObject(root, "forecast_valid", s.forecast_valid);
+    cJSON_AddBoolToObject(root, "obs_stale", wx_obs_is_stale(&s));
+    cJSON_AddBoolToObject(root, "udp_stale", wx_udp_is_stale(&s));
+    cJSON_AddBoolToObject(root, "wifi_connected", s.wifi_connected);
+    cJSON_AddNumberToObject(root, "udp_packets", s.udp_packets_total);
+
+    char ip[16];
+    if (net_get_ip(ip, sizeof(ip))) {
+        cJSON_AddStringToObject(root, "ip", ip);
+    }
     cJSON_AddNumberToObject(root, "forecast_days", s.forecast_days);
+    cJSON_AddBoolToObject(root, "forecast_valid", s.forecast_valid);
 
     sdcard_info_t sdi;
     if (sdcard_get_info(&sdi) == ESP_OK && sdi.mounted) {
@@ -156,8 +210,8 @@ esp_err_t web_server_start(void)
     if (s_server) return ESP_OK;
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.server_port = 8080;
-    config.ctrl_port = 8081;
+    config.server_port = WEB_PORT;
+    config.ctrl_port = WEB_PORT + 1;
     config.lru_purge_enable = true;
 
     ESP_LOGI(TAG, "Starting HTTP server on port 8080 (http://tempest.local:8080)...");
@@ -191,12 +245,22 @@ esp_err_t web_server_start(void)
     };
     httpd_register_uri_handler(s_server, &chime_uri);
 
-    ESP_LOGI(TAG, "Web Server started at http://tempest.local");
+    mdns_start();
+
+    char ip[16];
+    if (net_get_ip(ip, sizeof(ip))) {
+        ESP_LOGI(TAG, "web dashboard: http://%s:%d/ (mdns: http://tempest.local:%d/)",
+                 ip, WEB_PORT, WEB_PORT);
+    } else {
+        ESP_LOGI(TAG, "web dashboard on port %d (mdns: http://tempest.local:%d/)",
+                 WEB_PORT, WEB_PORT);
+    }
     return ESP_OK;
 }
 
 void web_server_stop(void)
 {
+    mdns_stop();
     if (s_server) {
         httpd_stop(s_server);
         s_server = NULL;

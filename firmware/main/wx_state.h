@@ -196,6 +196,9 @@ void wx_note_udp_packet(void);
 /* True if no obs_st has landed within CONFIG_TEMPEST_OBS_STALE_S. */
 bool wx_obs_is_stale(const wx_state_t *s);
 
+/* True if no UDP datagram of any kind within CONFIG_TEMPEST_OBS_STALE_S. */
+bool wx_udp_is_stale(const wx_state_t *s);
+
 /* True if the indoor reading is older than CONFIG_INDOOR_STALE_S. Separate
  * from wx_obs_is_stale because the two feeds fail independently. */
 bool wx_indoor_is_stale(const wx_state_t *s);

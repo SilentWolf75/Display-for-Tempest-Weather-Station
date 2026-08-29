@@ -411,6 +411,18 @@ bool wx_obs_is_stale(const wx_state_t *s)
     return (now - s->obs_epoch) > CONFIG_TEMPEST_OBS_STALE_S;
 }
 
+bool wx_udp_is_stale(const wx_state_t *s)
+{
+    if (s->last_udp_epoch <= 0) {
+        return true;
+    }
+    int64_t now = (int64_t)time(NULL);
+    if (now < 1600000000LL) {
+        return false;
+    }
+    return (now - s->last_udp_epoch) > CONFIG_TEMPEST_OBS_STALE_S;
+}
+
 bool wx_indoor_is_stale(const wx_state_t *s)
 {
     if (!s->indoor_valid) {

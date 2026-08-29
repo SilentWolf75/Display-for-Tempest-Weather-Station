@@ -872,7 +872,7 @@ esp_err_t settings_init(void)
     w_diag = lv_label_create(right);
     lv_obj_set_style_text_font(w_diag, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(w_diag, COL_DIM, 0);
-    lv_label_set_text(w_diag, "Dashboard: http://tempest.local");
+    lv_label_set_text(w_diag, "checking...");
     lv_obj_set_pos(w_diag, 0, y + 36);
 
     /* Numeric on-screen keyboard for zip code entry */
@@ -979,18 +979,32 @@ void settings_tick(void)
             snprintf(sd_str, sizeof(sd_str), "no card");
         }
 
+        char web_url[72];
+        char ip[16];
+        if (net_get_ip(ip, sizeof(ip))) {
+            snprintf(web_url, sizeof(web_url), "http://%s:8080", ip);
+        } else if (net_is_connected()) {
+            snprintf(web_url, sizeof(web_url), "http://tempest.local:8080");
+        } else {
+            snprintf(web_url, sizeof(web_url), "not available");
+        }
+
         lv_label_set_text_fmt(w_diag,
             "firmware  %s (%s)\n"
             "network   %s\n"
-            "station   live %.2f V  RSSI %d\n"
+            "web       %s\n"
+            "station   %s  %.2f V  RSSI %d\n"
             "indoor    %s\n"
             "storage   %s\n"
             "udp       %lu packets\n"
             "memory    %u KB internal / %u KB psram",
             app->version, app->date,
             net_is_connected() ? "connected" : "disconnected",
+            web_url,
+            wx_obs_is_stale(&s) ? "stale" : (s.obs_valid ? "live" : "waiting"),
             (double)s.battery_v, s.hub_rssi,
-            s.indoor_valid ? "sensor active" : "no sensor",
+            s.indoor_valid ? (wx_indoor_is_stale(&s) ? "sensor stale" : "sensor active")
+                           : "no sensor",
             sd_str,
             (unsigned long)pkts,
             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,

@@ -1189,7 +1189,15 @@ static void update_smart_pill(const wx_state_t *s)
     lv_color_t border = COL_WIND_NEON;
     lv_color_t text = COL_TEXT;
 
-    if (s->obs_valid && s->rain_rate_mm_hr > 0.05f) {
+    if (s->obs_valid && wx_obs_is_stale(s) && net_time_is_valid()) {
+        int mins = (int)((time(NULL) - s->obs_epoch) / 60);
+        if (mins < 1) {
+            mins = 1;
+        }
+        snprintf(msg, sizeof(msg), "Station data %d min old", mins);
+        border = COL_TEMP_AMBER;
+        text = COL_TEMP_AMBER;
+    } else if (s->obs_valid && s->rain_rate_mm_hr > 0.05f) {
         char rate[16];
         snprintf(rate, sizeof(rate), cfg_rain_fmt(), (double)U_RAIN(s->rain_rate_mm_hr));
         snprintf(msg, sizeof(msg), "Rain falling now at %s %s/hr", rate, U_RAIN_SUF);
@@ -1269,10 +1277,21 @@ static void update_header(const wx_state_t *s, int64_t now)
     lv_label_set_text(hdr_date, date_str);
 
     /* Station Status Dot & Diagnostics */
-    if (s->obs_valid) {
+    if (!s->wifi_connected) {
+        lv_obj_set_style_bg_color(hdr_dot, COL_ALERT, 0);
+        lv_label_set_text(hdr_station, "NO WI-FI");
+    } else if (wx_udp_is_stale(s)) {
+        lv_obj_set_style_bg_color(hdr_dot, COL_TEMP_AMBER, 0);
+        lv_label_set_text(hdr_station, "NO UDP");
+    } else if (wx_obs_is_stale(s)) {
+        lv_obj_set_style_bg_color(hdr_dot, COL_TEMP_AMBER, 0);
+        lv_label_set_text(hdr_station, "TEMPEST PRO");
+    } else if (s->obs_valid) {
         lv_obj_set_style_bg_color(hdr_dot, COL_OK, 0);
+        lv_label_set_text(hdr_station, "TEMPEST PRO");
     } else {
         lv_obj_set_style_bg_color(hdr_dot, COL_IDLE, 0);
+        lv_label_set_text(hdr_station, "TEMPEST PRO");
     }
 
     if (s->battery_v > 0.0f) {
@@ -1294,6 +1313,24 @@ static void update_header(const wx_state_t *s, int64_t now)
 
 static void update_top_deck(const wx_state_t *s, int64_t now)
 {
+    /* Link badge on the conditions card updates even when obs is missing. */
+    if (!s->wifi_connected) {
+        lv_label_set_text(cond_badge, "OFFLINE");
+        lv_obj_set_style_text_color(cond_badge, COL_ALERT, 0);
+    } else if (wx_udp_is_stale(s)) {
+        lv_label_set_text(cond_badge, "NO LINK");
+        lv_obj_set_style_text_color(cond_badge, COL_TEMP_AMBER, 0);
+    } else if (wx_obs_is_stale(s)) {
+        lv_label_set_text(cond_badge, "STALE");
+        lv_obj_set_style_text_color(cond_badge, COL_TEMP_AMBER, 0);
+    } else if (s->obs_valid) {
+        lv_label_set_text(cond_badge, "LIVE");
+        lv_obj_set_style_text_color(cond_badge, COL_OK, 0);
+    } else {
+        lv_label_set_text(cond_badge, "WAITING");
+        lv_obj_set_style_text_color(cond_badge, COL_DIM, 0);
+    }
+
     if (!s->obs_valid) {
         return;
     }
@@ -1415,6 +1452,22 @@ static void update_top_deck(const wx_state_t *s, int64_t now)
         } else {
             lv_label_set_text(in_comfort_badge, "Comfortable");
             lv_obj_set_style_text_color(in_comfort_badge, COL_OK, 0);
+        }
+
+        if (wx_indoor_is_stale(s) && net_time_is_valid()) {
+            int mins = (int)((now - s->indoor_fetched_epoch) / 60);
+            if (mins < 1) {
+                mins = 1;
+            }
+            set_text(in_status_lbl, "updated %d min ago", mins);
+            lv_obj_set_style_text_color(in_status_lbl, COL_TEMP_AMBER, 0);
+            lv_obj_set_style_text_opa(in_temp_val, LV_OPA_40, 0);
+            lv_obj_set_style_text_opa(in_hum_val, LV_OPA_40, 0);
+        } else {
+            lv_label_set_text(in_status_lbl, "sensor active");
+            lv_obj_set_style_text_color(in_status_lbl, COL_FAINT, 0);
+            lv_obj_set_style_text_opa(in_temp_val, LV_OPA_COVER, 0);
+            lv_obj_set_style_text_opa(in_hum_val, LV_OPA_COVER, 0);
         }
     } else {
         lv_obj_clear_flag(in_no_sensor_view, LV_OBJ_FLAG_HIDDEN);
