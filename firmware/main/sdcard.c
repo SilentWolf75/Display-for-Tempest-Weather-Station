@@ -330,5 +330,6 @@ esp_err_t sdcard_log_weather(const wx_state_t *s, int64_t now_epoch)
 
     fclose(f);
     s_last_log_epoch = now_epoch;
+    ESP_LOGI(TAG, "logged weather row -> %s (%s)", path, when);
     return ESP_OK;
 }

@@ -259,7 +259,7 @@ TILT = 18;              // degrees off vertical
 //
 // Set this true to open all of them again. The positions are read from the
 // PCB file and are correct either way; this only decides which get cut.
-ALL_PORTS = false;
+ALL_PORTS = true;
 
 // ---------------------------------------------------------------------------
 // WHICH WAY ROUND THE BOARD DATA IS

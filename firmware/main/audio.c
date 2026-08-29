@@ -11,6 +11,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_log.h"
 #include "driver/i2s_std.h"
 #include "driver/gpio.h"
@@ -21,12 +22,49 @@ static const char *TAG = "audio";
 #define CHUNK_SAMPLES       256
 #define TASK_STACK_SIZE     (8 * 1024)
 #define TASK_PRIO           5
+#define CLICK_QUEUE_LEN     8
+#define CLICK_TASK_STACK    (8 * 1024)
 
 static i2s_chan_handle_t  s_tx_handle = NULL;
 static TaskHandle_t       s_play_task = NULL;
+static TaskHandle_t       s_click_task = NULL;
+static QueueHandle_t      s_click_queue = NULL;
+static SemaphoreHandle_t  s_i2s_mutex = NULL;
 static volatile bool      s_stop_requested = false;
 static volatile bool      s_is_playing = false;
-static int                s_volume_pct = 90;
+static int                s_alert_volume = 80;
+static int                s_notification_volume = 70;
+
+#define KEYCLICK_VOL_SCALE  0.95f   /* keyboard — always full, ignores sliders */
+
+/* Reused by the click task — keeps 3 KB off its stack. */
+static int16_t s_click_mono_buf[CHUNK_SAMPLES];
+static int16_t s_click_stereo_buf[CHUNK_SAMPLES * 2];
+
+static void click_task(void *arg);
+static void click_once_task(void *arg);
+static void play_key_click_sound(void);
+static bool play_spiffs_wav_ex(const char *rel_name, float vol_mul);
+
+typedef enum {
+    AUDIO_VOL_ALERT = 0,
+    AUDIO_VOL_NOTIFICATION,
+} audio_vol_class_t;
+
+static float alert_vol_scale(void)
+{
+    return (float)s_alert_volume / 100.0f * 0.90f;
+}
+
+static float notification_vol_scale(void)
+{
+    return (float)s_notification_volume / 100.0f * 0.95f;
+}
+
+static float vol_scale_for(audio_vol_class_t vol)
+{
+    return vol == AUDIO_VOL_NOTIFICATION ? notification_vol_scale() : alert_vol_scale();
+}
 
 static void mute_amplifier(void)
 {
@@ -124,32 +162,64 @@ esp_err_t audio_init(void)
 
     cfg_t cfg;
     cfg_get(&cfg);
-    s_volume_pct = cfg.alert_volume;
-    if (s_volume_pct <= 0) s_volume_pct = 90;
+    s_alert_volume = cfg.alert_volume;
+    s_notification_volume = cfg.notification_volume;
+    if (s_alert_volume <= 0) {
+        s_alert_volume = 80;
+    }
+    if (s_notification_volume <= 0) {
+        s_notification_volume = 70;
+    }
 
     clear_i2s_dma();
     mute_amplifier();
 
-    ESP_LOGI(TAG, "I2S Audio ready (muted): Rate=%d Hz, Vol=%d%%", DEFAULT_SAMPLE_RATE, s_volume_pct);
+    s_i2s_mutex = xSemaphoreCreateMutex();
+    s_click_queue = xQueueCreate(CLICK_QUEUE_LEN, sizeof(uint8_t));
+    if (s_click_queue) {
+        if (xTaskCreate(click_task, "audio_click", CLICK_TASK_STACK, NULL, TASK_PRIO + 1,
+                        &s_click_task) != pdPASS) {
+            ESP_LOGW(TAG, "key-click task create failed");
+        }
+    } else {
+        ESP_LOGW(TAG, "key-click queue unavailable");
+    }
+
+    ESP_LOGI(TAG, "I2S Audio ready (muted): alert=%d%% notify=%d%%",
+             s_alert_volume, s_notification_volume);
     return ESP_OK;
+}
+
+void audio_set_alert_volume(int percent)
+{
+    if (percent < 0)   percent = 0;
+    if (percent > 100) percent = 100;
+    s_alert_volume = percent;
+}
+
+void audio_set_notification_volume(int percent)
+{
+    if (percent < 0)   percent = 0;
+    if (percent > 100) percent = 100;
+    s_notification_volume = percent;
 }
 
 void audio_set_volume(int percent)
 {
-    if (percent < 0)   percent = 0;
-    if (percent > 100) percent = 100;
-    s_volume_pct = percent;
+    audio_set_alert_volume(percent);
 }
 
 int audio_get_volume(void)
 {
-    return s_volume_pct;
+    return s_alert_volume;
 }
 
 /* Synthesizer Tone Player */
-static void play_tone_internal(audio_alert_type_t type, int duration_ms)
+static void play_tone_internal_ex(audio_alert_type_t type, int duration_ms,
+                                  bool honour_stop, float vol_scale)
 {
     unmute_amplifier();
+    vTaskDelay(pdMS_TO_TICKS(12));
 
     int total_samples = (int)((int64_t)duration_ms * DEFAULT_SAMPLE_RATE / 1000);
     int16_t buffer[CHUNK_SAMPLES * 2];
@@ -169,16 +239,15 @@ static void play_tone_internal(audio_alert_type_t type, int duration_ms)
         freq1 = 587.33f;
         freq2 = 880.00f;
     } else if (type == AUDIO_ALERT_BEEP) {
-        freq1 = 2000.0f;
+        freq1 = 1400.0f;
         freq2 = 0.0f;
     }
 
     float delta1 = (2.0f * (float)M_PI * freq1) / (float)DEFAULT_SAMPLE_RATE;
     float delta2 = (2.0f * (float)M_PI * freq2) / (float)DEFAULT_SAMPLE_RATE;
-    float vol_scale = (float)s_volume_pct / 100.0f * 0.90f;
     int samples_sent = 0;
 
-    while (samples_sent < total_samples && !s_stop_requested) {
+    while (samples_sent < total_samples && (!honour_stop || !s_stop_requested)) {
         int chunk = CHUNK_SAMPLES;
         if (samples_sent + chunk > total_samples) {
             chunk = total_samples - samples_sent;
@@ -217,8 +286,19 @@ static void play_tone_internal(audio_alert_type_t type, int duration_ms)
     mute_amplifier();
 }
 
+static void play_tone_internal(audio_alert_type_t type, int duration_ms)
+{
+    play_tone_internal_ex(type, duration_ms, true, alert_vol_scale());
+}
+
+static void play_tone_notification(audio_alert_type_t type, int duration_ms)
+{
+    play_tone_internal_ex(type, duration_ms, true, notification_vol_scale());
+}
+
 /* Stream WAV audio file chunk-by-chunk from SPIFFS without buffer allocation */
-static bool play_spiffs_wav(const char *rel_name)
+static bool play_spiffs_wav_ex2(const char *rel_name, float vol_scale, bool honour_stop,
+                                int16_t *mono_buf, int16_t *stereo_out)
 {
     char path[128];
     snprintf(path, sizeof(path), "/icons/audio/%s", rel_name);
@@ -236,14 +316,10 @@ static bool play_spiffs_wav(const char *rel_name)
         return false;
     }
 
-    ESP_LOGI(TAG, "Streaming audio broadcast: %s", path);
     unmute_amplifier();
+    vTaskDelay(pdMS_TO_TICKS(12));
 
-    int16_t mono_buf[CHUNK_SAMPLES];
-    int16_t stereo_out[CHUNK_SAMPLES * 2];
-    float vol_scale = (float)s_volume_pct / 100.0f * 0.95f;
-
-    while (!s_stop_requested) {
+    while (!honour_stop || !s_stop_requested) {
         size_t read_samples = fread(mono_buf, sizeof(int16_t), CHUNK_SAMPLES, f);
         if (read_samples == 0) {
             break;
@@ -267,31 +343,104 @@ static bool play_spiffs_wav(const char *rel_name)
     return true;
 }
 
-static void play_voice_announcement(const char *text)
+static bool play_spiffs_wav_ex(const char *rel_name, float vol_mul)
 {
-    if (!text || text[0] == '\0' || s_stop_requested) return;
+    int16_t mono_buf[CHUNK_SAMPLES];
+    int16_t stereo_out[CHUNK_SAMPLES * 2];
+    float scale = alert_vol_scale() * vol_mul;
+    return play_spiffs_wav_ex2(rel_name, scale, true, mono_buf, stereo_out);
+}
+
+static bool play_spiffs_wav_vol(const char *rel_name, audio_vol_class_t vol)
+{
+    int16_t mono_buf[CHUNK_SAMPLES];
+    int16_t stereo_out[CHUNK_SAMPLES * 2];
+    return play_spiffs_wav_ex2(rel_name, vol_scale_for(vol), true, mono_buf, stereo_out);
+}
+
+static void play_key_click_sound(void)
+{
+    if (s_i2s_mutex) {
+        xSemaphoreTake(s_i2s_mutex, portMAX_DELAY);
+    }
+
+    /* Clicks must not inherit a stale stop flag left by alert playback. */
+    s_stop_requested = false;
+
+    if (!play_spiffs_wav_ex2("keyclick.wav", KEYCLICK_VOL_SCALE, false,
+                             s_click_mono_buf, s_click_stereo_buf)) {
+        ESP_LOGW(TAG, "keyclick.wav missing, using tone fallback");
+        play_tone_internal_ex(AUDIO_ALERT_BEEP, 70, false, KEYCLICK_VOL_SCALE);
+    }
+
+    if (s_i2s_mutex) {
+        xSemaphoreGive(s_i2s_mutex);
+    }
+}
+
+static void click_once_task(void *arg)
+{
+    (void)arg;
+    play_key_click_sound();
+    vTaskDelete(NULL);
+}
+
+static void click_task(void *arg)
+{
+    (void)arg;
+    uint8_t drop;
+    for (;;) {
+        if (xQueueReceive(s_click_queue, &drop, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        play_key_click_sound();
+    }
+}
+
+static void play_voice_announcement(const char *text, audio_vol_class_t vol)
+{
+    if (!text || text[0] == '\0' || s_stop_requested) {
+        return;
+    }
 
     /* Direct WAV file name playback */
     if (strstr(text, ".wav") != NULL) {
-        if (play_spiffs_wav(text)) return;
+        if (play_spiffs_wav_vol(text, vol)) {
+            return;
+        }
     }
 
     if (strstr(text, "chime") != NULL || strstr(text, "Chime") != NULL) {
-        if (play_spiffs_wav("chime.wav")) return;
+        if (play_spiffs_wav_vol("chime.wav", AUDIO_VOL_NOTIFICATION)) {
+            return;
+        }
     }
     if (strstr(text, "test") != NULL || strstr(text, "Test") != NULL) {
-        if (play_spiffs_wav("test.wav")) return;
+        if (play_spiffs_wav_vol("test.wav", vol)) {
+            return;
+        }
     }
     if (strstr(text, "Tornado") != NULL || strstr(text, "tornado") != NULL) {
-        if (play_spiffs_wav("tornado.wav")) return;
+        if (play_spiffs_wav_vol("tornado.wav", AUDIO_VOL_ALERT)) {
+            return;
+        }
     }
     if (strstr(text, "Thunderstorm") != NULL || strstr(text, "thunderstorm") != NULL) {
-        if (play_spiffs_wav("thunderstorm.wav")) return;
+        if (play_spiffs_wav_vol("thunderstorm.wav", AUDIO_VOL_ALERT)) {
+            return;
+        }
     }
     if (strstr(text, "Flood") != NULL || strstr(text, "flood") != NULL) {
-        if (play_spiffs_wav("flood.wav")) return;
+        if (play_spiffs_wav_vol("flood.wav", AUDIO_VOL_ALERT)) {
+            return;
+        }
     }
-    if (play_spiffs_wav("general.wav")) {
+    if (strstr(text, "morning_") != NULL) {
+        if (play_spiffs_wav_vol(text, AUDIO_VOL_NOTIFICATION)) {
+            return;
+        }
+    }
+    if (play_spiffs_wav_vol("general.wav", AUDIO_VOL_ALERT)) {
         return;
     }
 }
@@ -301,11 +450,17 @@ typedef struct {
     int                duration_ms;
     char              *tts_text;
     bool               is_broadcast;
+    bool               is_key_click;
+    bool               is_notify;
+    audio_vol_class_t  vol_class;
 } audio_task_params_t;
 
 static void audio_master_task(void *arg)
 {
     audio_task_params_t *p = (audio_task_params_t *)arg;
+    if (s_i2s_mutex) {
+        xSemaphoreTake(s_i2s_mutex, portMAX_DELAY);
+    }
     s_is_playing = true;
     s_stop_requested = false;
 
@@ -318,10 +473,17 @@ static void audio_master_task(void *arg)
 
         /* 3. Play Broadcast Announcement */
         if (p->tts_text && !s_stop_requested) {
-            play_voice_announcement(p->tts_text);
+            play_voice_announcement(p->tts_text, AUDIO_VOL_ALERT);
+        }
+    } else if (p->is_key_click) {
+        play_key_click_sound();
+    } else if (p->is_notify) {
+        if (!play_spiffs_wav_vol("notify.wav", AUDIO_VOL_NOTIFICATION) &&
+            !s_stop_requested) {
+            play_tone_notification(AUDIO_ALERT_CHIME, 180);
         }
     } else if (p->tts_text) {
-        play_voice_announcement(p->tts_text);
+        play_voice_announcement(p->tts_text, p->vol_class);
     } else {
         play_tone_internal(p->type, p->duration_ms);
     }
@@ -336,6 +498,9 @@ static void audio_master_task(void *arg)
 
     s_is_playing = false;
     s_play_task = NULL;
+    if (s_i2s_mutex) {
+        xSemaphoreGive(s_i2s_mutex);
+    }
     vTaskDelete(NULL);
 }
 
@@ -345,7 +510,14 @@ static void start_audio_task(audio_task_params_t *p)
         audio_stop();
         vTaskDelay(pdMS_TO_TICKS(60));
     }
-    xTaskCreate(audio_master_task, "audio_task", TASK_STACK_SIZE, p, TASK_PRIO, &s_play_task);
+    if (xTaskCreate(audio_master_task, "audio_task", TASK_STACK_SIZE, p, TASK_PRIO,
+                    &s_play_task) != pdPASS) {
+        ESP_LOGW(TAG, "audio task create failed");
+        if (p->tts_text) {
+            free(p->tts_text);
+        }
+        free(p);
+    }
 }
 
 void audio_play_alert(audio_alert_type_t type, int duration_ms)
@@ -369,14 +541,50 @@ void audio_play_eas_siren(int duration_sec)
 
 void audio_play_chime(void)
 {
-    audio_play_tts("chime.wav");
+    audio_task_params_t *p = calloc(1, sizeof(audio_task_params_t));
+    if (!p) {
+        return;
+    }
+    p->vol_class = AUDIO_VOL_NOTIFICATION;
+    p->tts_text = strdup("chime.wav");
+    start_audio_task(p);
+}
+
+void audio_play_key_click(void)
+{
+    if (!s_click_queue) {
+        xTaskCreate(click_once_task, "audio_click_once", CLICK_TASK_STACK, NULL,
+                    TASK_PRIO + 1, NULL);
+        return;
+    }
+    uint8_t tick = 1;
+    if (xQueueSend(s_click_queue, &tick, 0) != pdTRUE) {
+        /* Queue full — drop oldest and retry once. */
+        xQueueReceive(s_click_queue, &tick, 0);
+        xQueueSend(s_click_queue, &tick, 0);
+    }
+}
+
+void audio_play_notify(void)
+{
+    audio_task_params_t *p = calloc(1, sizeof(audio_task_params_t));
+    if (!p) {
+        return;
+    }
+    p->is_notify = true;
+    start_audio_task(p);
 }
 
 void audio_play_tts(const char *text)
 {
-    if (!text || text[0] == '\0') return;
+    if (!text || text[0] == '\0') {
+        return;
+    }
     audio_task_params_t *p = calloc(1, sizeof(audio_task_params_t));
-    if (!p) return;
+    if (!p) {
+        return;
+    }
+    p->vol_class = AUDIO_VOL_ALERT;
     p->tts_text = strdup(text);
     start_audio_task(p);
 }
@@ -421,7 +629,13 @@ void audio_play_morning_briefing(const char *condition_slug)
             wav_file = "morning_rain.wav";
         }
     }
-    audio_play_tts(wav_file);
+    audio_task_params_t *p = calloc(1, sizeof(audio_task_params_t));
+    if (!p) {
+        return;
+    }
+    p->vol_class = AUDIO_VOL_NOTIFICATION;
+    p->tts_text = strdup(wav_file);
+    start_audio_task(p);
 }
 
 void audio_scheduler_tick(int64_t now_epoch, const char *condition_slug)

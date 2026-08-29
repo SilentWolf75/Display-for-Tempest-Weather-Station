@@ -45,6 +45,7 @@ static const char HTML_PAGE[] =
 "<div class='card'><div class='label'>Solar / UV</div><div class='val' id='solar'>-- W/m²</div><div class='sub' id='uv'>UV Index --</div></div>"
 "<div class='card'><div class='label'>Air Quality</div><div class='val' id='aqi'>--</div><div class='sub' id='aqi_cat'>EPA Index</div></div>"
 "<div class='card'><div class='label'>Station Health</div><div class='val' id='battery'>-- V</div><div class='sub' id='hub_rssi'>Hub RSSI: -- dBm</div></div>"
+"<div class='card'><div class='label'>Indoor</div><div class='val' id='indoor_temp'>--°</div><div class='sub' id='indoor_hum'>Humidity --%</div></div>"
 "</div>"
 "<script>"
 "async function update(){"
@@ -65,6 +66,9 @@ static const char HTML_PAGE[] =
 "document.getElementById('aqi_cat').innerText=d.aqi_cat||'EPA Index';"
 "document.getElementById('battery').innerText=d.battery_v.toFixed(2)+' V';"
 "document.getElementById('hub_rssi').innerText='Hub RSSI: '+d.hub_rssi+' dBm';"
+"if(d.indoor_valid){document.getElementById('indoor_temp').innerText=d.indoor_temp_f.toFixed(1)+'°F';"
+"document.getElementById('indoor_hum').innerText='Humidity '+d.indoor_humidity.toFixed(0)+'%';}"
+"else{document.getElementById('indoor_temp').innerText='--°';document.getElementById('indoor_hum').innerText='No Grove sensor';}"
 "}catch(e){}}"
 "setInterval(update,3000);update();"
 "</script></body></html>";
@@ -97,6 +101,12 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "aqi", s.aqi_valid ? s.aqi_val : 0);
     cJSON_AddStringToObject(root, "aqi_cat", s.aqi_valid ? s.aqi_category : "Unknown");
     cJSON_AddNumberToObject(root, "battery_v", (double)s.battery_v);
+    cJSON_AddNumberToObject(root, "hub_rssi", s.hub_rssi);
+    cJSON_AddBoolToObject(root, "indoor_valid", s.indoor_valid);
+    if (s.indoor_valid) {
+        cJSON_AddNumberToObject(root, "indoor_temp_f", (double)wx_c_to_f(s.indoor_temp_c));
+        cJSON_AddNumberToObject(root, "indoor_humidity", (double)s.indoor_humidity_pct);
+    }
     cJSON_AddBoolToObject(root, "forecast_valid", s.forecast_valid);
     cJSON_AddNumberToObject(root, "forecast_days", s.forecast_days);
 

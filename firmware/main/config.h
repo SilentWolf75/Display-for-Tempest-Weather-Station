@@ -40,7 +40,8 @@ typedef struct {
     bool        animate_forecast;    /* animate all 7 icons, not just header */
     uint8_t     wind_scale_max_ms;   /* full-scale on the wind ring */
     char        alert_zipcode[10];   /* 5-digit US Zip Code for NOAA alerts */
-    uint8_t     alert_volume;        /* 0..100 % volume */
+    uint8_t     alert_volume;        /* 0..100 % — NOAA siren & alert voice */
+    uint8_t     notification_volume; /* 0..100 % — chimes, briefings, UI pings */
     bool        alert_siren_enabled; /* Audible 1050 Hz siren on active warning */
     bool        hourly_chime_enabled;/* Soft chime at top of the hour (8am-8pm) */
     bool        morning_briefing_enabled; /* Spoken forecast brief at wakeup */

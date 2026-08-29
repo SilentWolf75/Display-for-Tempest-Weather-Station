@@ -60,19 +60,20 @@ without the UI noticing.
 | 1 — Board bring-up | **done** — panel, touch, PSRAM, icons, Wi-Fi all verified |
 | 2 — UDP broadcast through ESP-Hosted (the risk gate) | **PASSED** on hardware |
 | 3 — Data layer | **live** — obs_st decoding verified against the real station |
-| 4 — UI | **running on hardware**, touch working |
-| Animated weather icons | Meteocons Lottie + ThorVG, **built and compiling** |
-| 5 — Polish | settings screen + night dimming done; OTA + graphs pending |
+| 4 — UI | **running on hardware** — dashboard, Night & Insights, graphs |
+| Animated weather icons | Meteocons Lottie + ThorVG on SPIFFS |
+| 5 — Polish | settings, night dim, audio, OTA, web dashboard, MQTT — **done** |
 | Correctness pass | **done** — rain/pressure/hi-lo/UV bugs fixed |
 | Hardware readiness | **done** — I2C scanner, boot diagnostics, OTA + rollback |
 | 24-hour trend graphs | **done** — local history + REST backfill at boot |
+| Insights page | **done** — moon, lightning, rain totals, hourly chart, AQI |
+| Case | STLs in `case/` — Grove port enabled (`ALL_PORTS = true`) |
 
-`firmware/` builds clean for `esp32p4` on ESP-IDF v5.5.3 — **2.04 MB app**
-(ThorVG's vector engine is 423 KB of that) plus **416 KB of icon artwork** on
-the 2 MB storage partition. The layout is now OTA-capable: two 3 MB app slots
-with automatic rollback, 35 % free in the active slot. It has **never been run on real
-hardware**. Treat pin assignments in `firmware/main/board_pins.h` as unverified
-— see the warning at the top of that file.
+`firmware/` builds for `esp32p4` on ESP-IDF v5.5.3 and **runs on the CrowPanel
+Advance 10.1"** — UDP ingest, touch UI, audio, SD logging, and Wi-Fi all
+verified on hardware. Pin assignments in `firmware/main/board_pins.h` are still
+marked unverified in source; see the header comment before trusting them on a
+different board revision.
 
 ## Try it now, without hardware
 
@@ -144,8 +145,10 @@ firmware/      ESP-IDF project
     indoor.[ch]       local I2C temp/humidity sensor (AHT20/DHT20 or SHT4x)
     display.[ch]      EK79007 + GT911 + LVGL bring-up
     board_pins.h      pin map — UNVERIFIED, read the header
-    ui/ui.c           the screen: rings, cards, forecast strip
-    ui/wx_icons.c     Meteocons Lottie icons via ThorVG, loaded from SPIFFS
+    mqtt_client_app.c Home Assistant MQTT auto-discovery
+    web_server.c      LAN dashboard at http://tempest.local:8080
+    ui/ui.c           dashboard: rings, cards, forecast, alert banner
+    ui/page2.c        Night & Insights second screen
   spiffs/icons/     generated artwork (python tools/build_icons.py)
 tools/         Python listener, simulator, and icon builder
 ```

@@ -58,59 +58,24 @@ and then silently carries no data, which cost most of a day.
 - SNTP for wall-clock time (needed for sunrise/sunset and "last updated" staleness).
 - Staleness tracking: mark the display degraded if no `obs_st` for > 3 minutes.
 
-## Milestone 4 — UI  (first pass written, compiles clean)
+## Milestone 4 — UI  ✅ running on hardware
 
-Gauge-based layout, 1024x600 landscape. Three rings across the top -- outdoor
-cards, then a seven-day forecast strip.
+Gauge-based layout, 1024x600 landscape. Three-page navigation: dashboard,
+Night & Insights, and 24 h trend graphs.
 
-Implementation notes worth keeping:
+Implemented on hardware:
 
-- **Graded rings are N solid arcs, not a gradient.** LVGL 9.2 cannot draw a
-  gradient along an arc. `make_graded_scale()` stacks five `lv_arc`s sharing a
-  centre, each covering one 54-degree slice, with a position knob on top. The
-  commercial consoles do the same thing.
-- **Stale indoor dims to 40% AND states its age.** Dimming alone hides whether
-  a reading is six minutes or six hours old, and this feed is cloud-dependent
-  so it fails while the outdoor half keeps running.
-- **Forecast icons need a font that does not exist yet.** `ui/wx_icons.c` maps
-  WeatherFlow slugs to Weather Icons codepoints and currently returns short
-  text placeholders. Flip `WX_ICON_FONT_AVAILABLE` after running the
-  `lv_font_conv` command in `ui/wx_icons.h`. ~25 KB, versus ~400 KB for the
-  equivalent PNG set which also could not be recoloured.
+- Live wind dial driven by `rapid_wind` at 3 s
+- Lightning alert banner on the header strip (NWS warnings take priority)
+- Smart weather insight pill on the conditions card
+- EPA AQI badge in the header when AirNow data is available
+- Heat index / wind chill smart-pill on the temperature card
+- All LVGL calls wrapped in `display_lock()` / `display_unlock()`
 
-### Superseded first draft
-
-
-
-1024x600 landscape. Hand-written LVGL first; SquareLine only if the layout stops being
-expressible in code comfortably.
-
-Original flat-tile sketch, kept for reference:
-
-```
-+----------------------------------------------------------+
-|  72F          Partly Cloudy          Sat 3:42 PM   [wifi] |
-|  feels 75F                                                |
-+---------------------+------------------------------------+
-|   WIND              |  humidity  pressure  uv   rain today|
-|   [compass dial]    |    52%     29.94"    3.1    0.02"   |
-|   4.2 mph  NNW      |                                     |
-|   gust 9.1                                                |
-+---------------------+------------------------------------+
-|  [ 7-day forecast strip: icon / hi / lo / precip% ]       |
-+----------------------------------------------------------+
-```
-
-- Live wind dial driven by `rapid_wind` at 3 s — the one thing that makes a Tempest
-  display feel alive rather than like a webpage.
-- Lightning banner that takes over the top strip on `evt_strike`.
-- All LVGL calls wrapped in `lvgl_port_lock()` / `lvgl_port_unlock()`. Non-negotiable —
-  this is the documented failure mode on this board.
-
-## Milestone 5b — Trend graphs  (written, compiles clean)
+## Milestone 5b — Trend graphs  ✅ done
 
 Third screen, 2x2: temperature, pressure, wind (average + gust), humidity.
-Reached by the chart button next to the gear, bottom-right.
+Reached by swiping or the page button in the header.
 
 - **History is local**, in `history.c`: 288 five-minute buckets covering 24 h,
   ~13 KB in PSRAM, fed from every `obs_st`. Same rule as the rest of the
@@ -130,18 +95,18 @@ Reached by the chart button next to the gear, bottom-right.
   to race against the live UDP feed.
   Needs the API token; without one the graphs fill from live data only.
 
-## Milestone 5 — Polish
+## Milestone 5 — Polish  ✅ largely done
 
-- Backlight schedule / dim at night (PWM on the backlight pin, once known).
-- Touch: tap a tile to swap units, swipe for a history graph page.
-- 24 h trend sparklines from `observations/?device_id=...` with a time range.
-- Custom partition table — the stock ones do not leave room for UI image assets, per the
-  Elecrow wiki.
-- OTA, so the panel does not need to come off the wall.
+- Backlight schedule / dim at night (PWM) — **done**
+- Runtime settings in NVS — **done**
+- 24 h trend graphs — **done** (see 5b)
+- OTA with automatic rollback — **done** (`ota.c`, LAN upload)
+- Local web dashboard — **done** (`http://tempest.local:8080`)
+- Home Assistant MQTT auto-discovery — **done** (toggle + broker in settings)
+- Audio: alerts, chimes, keyboard clicks — **done**
+- microSD CSV logging — **done**
+- Printed case with Grove port for indoor sensor — **done** (`ALL_PORTS = true`)
 
 ## Open questions
 
-- Has the hardware arrived? Milestones 1+ need it; Milestone 0 does not.
-- Wall-mounted or desk? Decides whether backlight scheduling and viewing angle matter.
-- Preferred units — the code carries SI and converts at the edge, so this is a one-line
-  default plus a touch toggle.
+- Wall-mounted or desk? The case in `case/` is a desk stand; wall mount is not designed yet.

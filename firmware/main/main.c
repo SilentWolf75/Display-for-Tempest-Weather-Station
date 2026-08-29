@@ -178,9 +178,8 @@ void app_main(void)
     if (cfg_boot.web_server_enabled) {
         web_server_start();
     }
-    if (cfg_boot.mqtt_enabled) {
-        mqtt_app_start();
-    }
+    /* Task stays idle until mqtt_enabled is true in settings. */
+    mqtt_app_start();
 
     /* --- health log, and the Milestone 2 evidence trail ---
      * If packet_count stays at 0 while Wi-Fi is connected, the C6 is not

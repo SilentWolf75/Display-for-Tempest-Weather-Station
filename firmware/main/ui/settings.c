@@ -8,6 +8,8 @@
 #include "audio.h"
 #include "nws_alerts.h"
 #include "sdcard.h"
+#include "web_server.h"
+#include "mqtt_client_app.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -52,6 +54,7 @@ static uint32_t s_fmt_armed_at;
 static lv_obj_t *w_wifi_sub;
 static lv_obj_t *w_zip_ta, *w_kb;
 static lv_obj_t *w_vol_slider, *w_vol_val;
+static lv_obj_t *w_notif_vol_slider, *w_notif_vol_val;
 static lv_obj_t *w_alert_siren_sw;
 static lv_obj_t *w_hourly_chime_sw;
 static lv_obj_t *w_morning_brief_sw;
@@ -60,6 +63,7 @@ static lv_obj_t *w_night_standby_sw;
 static lv_obj_t *w_night_standby_red_sw;
 static lv_obj_t *w_web_server_sw;
 static lv_obj_t *w_mqtt_sw;
+static lv_obj_t *w_mqtt_broker_ta;
 
 /* ------------------------------------------------------------------------ */
 
@@ -71,6 +75,41 @@ static const char *format_hour_12(int h, char *buf, size_t sz)
     return buf;
 }
 
+/* set_selected_button() alone does not apply LV_STATE_CHECKED on boot — the
+ * saved value loads from NVS but nothing looks selected until you tap again. */
+static void buttonmatrix_apply_selection(lv_obj_t *bm, uint32_t sel)
+{
+    if (!bm || sel == LV_BUTTONMATRIX_BUTTON_NONE) {
+        return;
+    }
+
+    const char *const *map = (const char *const *)lv_buttonmatrix_get_map(bm);
+    if (!map) {
+        return;
+    }
+
+    uint32_t btn = 0;
+    for (uint32_t i = 0; map[i] && map[i][0] != '\0'; i++) {
+        if (map[i][0] == '\n') {
+            continue;
+        }
+        if (btn == sel) {
+            lv_buttonmatrix_set_button_ctrl(bm, btn, LV_BUTTONMATRIX_CTRL_CHECKED);
+            lv_buttonmatrix_set_selected_button(bm, btn);
+        } else {
+            lv_buttonmatrix_clear_button_ctrl(bm, btn, LV_BUTTONMATRIX_CTRL_CHECKED);
+        }
+        btn++;
+    }
+}
+
+static void sync_settings_toggles(void)
+{
+    cfg_t c;
+    cfg_get(&c);
+    buttonmatrix_apply_selection(w_units, (uint32_t)c.units);
+    buttonmatrix_apply_selection(w_tz, (uint32_t)c.timezone_idx);
+}
 
 static void style_buttonmatrix(lv_obj_t *bm)
 {
@@ -253,10 +292,23 @@ static void on_alert_volume(lv_event_t *e)
     cfg_get(&c);
     c.alert_volume = (uint8_t)lv_slider_get_value(lv_event_get_target(e));
     cfg_set(&c);
-    audio_set_volume(c.alert_volume);
+    audio_set_alert_volume(c.alert_volume);
     if (w_vol_val) {
         lv_label_set_text_fmt(w_vol_val, "%u%%", c.alert_volume);
     }
+}
+
+static void on_notification_volume(lv_event_t *e)
+{
+    cfg_t c;
+    cfg_get(&c);
+    c.notification_volume = (uint8_t)lv_slider_get_value(lv_event_get_target(e));
+    cfg_set(&c);
+    audio_set_notification_volume(c.notification_volume);
+    if (w_notif_vol_val) {
+        lv_label_set_text_fmt(w_notif_vol_val, "%u%%", c.notification_volume);
+    }
+    audio_play_notify();
 }
 
 static void on_alert_siren_toggle(lv_event_t *e)
@@ -330,6 +382,11 @@ static void on_web_server_toggle(lv_event_t *e)
     cfg_get(&c);
     c.web_server_enabled = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
     cfg_set(&c);
+    if (c.web_server_enabled) {
+        web_server_start();
+    } else {
+        web_server_stop();
+    }
 }
 
 static void on_mqtt_toggle(lv_event_t *e)
@@ -338,6 +395,24 @@ static void on_mqtt_toggle(lv_event_t *e)
     cfg_get(&c);
     c.mqtt_enabled = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
     cfg_set(&c);
+    mqtt_app_reconnect();
+}
+
+static void on_mqtt_broker_changed(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_READY || code == LV_EVENT_DEFOCUSED) {
+        const char *txt = lv_textarea_get_text(w_mqtt_broker_ta);
+        if (txt && txt[0]) {
+            cfg_t c;
+            cfg_get(&c);
+            strncpy(c.mqtt_broker, txt, sizeof(c.mqtt_broker) - 1);
+            c.mqtt_broker[sizeof(c.mqtt_broker) - 1] = '\0';
+            cfg_set(&c);
+            ESP_LOGI(TAG, "mqtt broker set to %s", c.mqtt_broker);
+            mqtt_app_reconnect();
+        }
+    }
 }
 
 static void on_zip_changed(lv_event_t *e)
@@ -384,24 +459,28 @@ static void on_reset(lv_event_t *e)
     cfg_t c;
     cfg_get(&c);
     char buf[16];
-    lv_buttonmatrix_set_selected_button(w_units, (uint32_t)c.units);
+    sync_settings_toggles();
     lv_slider_set_value(w_day, c.brightness_day, LV_ANIM_ON);
     lv_slider_set_value(w_night, c.brightness_night, LV_ANIM_ON);
     lv_slider_set_value(w_night_start, c.night_start_hour, LV_ANIM_ON);
     lv_slider_set_value(w_night_end, c.night_end_hour, LV_ANIM_ON);
     lv_slider_set_value(w_windmax, c.wind_scale_max_ms, LV_ANIM_ON);
     lv_slider_set_value(w_vol_slider, c.alert_volume, LV_ANIM_ON);
+    lv_slider_set_value(w_notif_vol_slider, c.notification_volume, LV_ANIM_ON);
     lv_label_set_text_fmt(w_day_val, "%u%%", c.brightness_day);
     lv_label_set_text_fmt(w_night_val, "%u%%", c.brightness_night);
     lv_label_set_text(w_night_start_val, format_hour_12(c.night_start_hour, buf, sizeof(buf)));
     lv_label_set_text(w_night_end_val, format_hour_12(c.night_end_hour, buf, sizeof(buf)));
     lv_label_set_text_fmt(w_vol_val, "%u%%", c.alert_volume);
+    lv_label_set_text_fmt(w_notif_vol_val, "%u%%", c.notification_volume);
 
     if (c.night_dim_enabled) lv_obj_add_state(w_night_en, LV_STATE_CHECKED);
     else                     lv_obj_clear_state(w_night_en, LV_STATE_CHECKED);
     if (c.alert_siren_enabled) lv_obj_add_state(w_alert_siren_sw, LV_STATE_CHECKED);
     else                       lv_obj_clear_state(w_alert_siren_sw, LV_STATE_CHECKED);
 
+    audio_set_alert_volume(c.alert_volume);
+    audio_set_notification_volume(c.notification_volume);
     display_set_brightness(c.brightness_day);
 }
 
@@ -418,6 +497,8 @@ esp_err_t settings_init(void)
 {
     cfg_t c;
     cfg_get(&c);
+    audio_set_alert_volume(c.alert_volume);
+    audio_set_notification_volume(c.notification_volume);
     char buf[16];
 
     s_screen = lv_obj_create(NULL);
@@ -490,7 +571,7 @@ esp_err_t settings_init(void)
     lv_obj_align(w_units, LV_ALIGN_TOP_RIGHT, 0, y + 2);
     lv_buttonmatrix_set_button_ctrl_all(w_units, LV_BUTTONMATRIX_CTRL_CHECKABLE);
     lv_buttonmatrix_set_one_checked(w_units, true);
-    lv_buttonmatrix_set_selected_button(w_units, (uint32_t)c.units);
+    buttonmatrix_apply_selection(w_units, (uint32_t)c.units);
     lv_obj_add_event_cb(w_units, on_units, LV_EVENT_VALUE_CHANGED, NULL);
     y += ROW_H + 4;
 
@@ -504,7 +585,7 @@ esp_err_t settings_init(void)
     lv_obj_align(w_tz, LV_ALIGN_TOP_RIGHT, 0, y + 2);
     lv_buttonmatrix_set_button_ctrl_all(w_tz, LV_BUTTONMATRIX_CTRL_CHECKABLE);
     lv_buttonmatrix_set_one_checked(w_tz, true);
-    lv_buttonmatrix_set_selected_button(w_tz, (uint32_t)c.timezone_idx);
+    buttonmatrix_apply_selection(w_tz, (uint32_t)c.timezone_idx);
     lv_obj_add_event_cb(w_tz, on_tz, LV_EVENT_VALUE_CHANGED, NULL);
     y += ROW_H + 4;
 
@@ -610,7 +691,7 @@ esp_err_t settings_init(void)
     lv_obj_center(rbl);
 
     /* --- Right Panel: NOAA Weather Alerts & System (h = 630) --- */
-    lv_obj_t *right = make_panel(body, PANEL_W + 16, 8, PANEL_W, 880);
+    lv_obj_t *right = make_panel(body, PANEL_W + 16, 8, PANEL_W, 940);
     y = 0;
 
     row_label(right, y, "NOAA Alert Zip Code");
@@ -626,7 +707,7 @@ esp_err_t settings_init(void)
     lv_obj_add_event_cb(w_zip_ta, on_zip_changed, LV_EVENT_ALL, NULL);
     y += ROW_H + 4;
 
-    row_label(right, y, "Alert Volume");
+    row_label(right, y, "Weather Alert Volume");
     w_vol_val = value_label(right, y, "");
     lv_label_set_text_fmt(w_vol_val, "%u%%", c.alert_volume);
     w_vol_slider = lv_slider_create(right);
@@ -635,6 +716,17 @@ esp_err_t settings_init(void)
     lv_slider_set_range(w_vol_slider, 0, 100);
     lv_slider_set_value(w_vol_slider, c.alert_volume, LV_ANIM_OFF);
     lv_obj_add_event_cb(w_vol_slider, on_alert_volume, LV_EVENT_VALUE_CHANGED, NULL);
+    y += ROW_H + 8;
+
+    row_label(right, y, "Notification Volume");
+    w_notif_vol_val = value_label(right, y, "");
+    lv_label_set_text_fmt(w_notif_vol_val, "%u%%", c.notification_volume);
+    w_notif_vol_slider = lv_slider_create(right);
+    lv_obj_set_size(w_notif_vol_slider, PANEL_W - 28, 12);
+    lv_obj_set_pos(w_notif_vol_slider, 0, y + 36);
+    lv_slider_set_range(w_notif_vol_slider, 0, 100);
+    lv_slider_set_value(w_notif_vol_slider, c.notification_volume, LV_ANIM_OFF);
+    lv_obj_add_event_cb(w_notif_vol_slider, on_notification_volume, LV_EVENT_VALUE_CHANGED, NULL);
     y += ROW_H + 8;
 
     row_label(right, y, "Audible Siren (1050 Hz)");
@@ -716,6 +808,18 @@ esp_err_t settings_init(void)
     lv_obj_add_event_cb(w_mqtt_sw, on_mqtt_toggle, LV_EVENT_VALUE_CHANGED, NULL);
     y += ROW_H + 4;
 
+    row_label(right, y, "MQTT Broker IP / Host");
+    w_mqtt_broker_ta = lv_textarea_create(right);
+    lv_obj_set_size(w_mqtt_broker_ta, 180, 40);
+    lv_obj_align(w_mqtt_broker_ta, LV_ALIGN_TOP_RIGHT, 0, y + 2);
+    lv_textarea_set_text(w_mqtt_broker_ta, c.mqtt_broker[0] ? c.mqtt_broker : "192.168.1.100");
+    lv_textarea_set_max_length(w_mqtt_broker_ta, 63);
+    lv_textarea_set_one_line(w_mqtt_broker_ta, true);
+    lv_obj_set_style_bg_color(w_mqtt_broker_ta, COL_BG, 0);
+    lv_obj_set_style_text_font(w_mqtt_broker_ta, &lv_font_montserrat_16, 0);
+    lv_obj_add_event_cb(w_mqtt_broker_ta, on_mqtt_broker_changed, LV_EVENT_ALL, NULL);
+    y += ROW_H + 8;
+
     row_label(right, y, "Wind Gauge Full Scale");
     w_windmax_val = value_label(right, y, "");
     lv_label_set_text_fmt(w_windmax_val, "%.0f %s",
@@ -786,6 +890,7 @@ void settings_show(void)
 {
     if (!s_screen) return;
     s_prev_screen = lv_screen_active();
+    sync_settings_toggles();
     lv_screen_load(s_screen);
     settings_tick();
 }

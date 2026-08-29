@@ -22,12 +22,22 @@ typedef enum {
 esp_err_t audio_init(void);
 
 /**
- * Set master playback volume (0 to 100).
+ * Set NOAA weather-alert playback volume (0 to 100).
+ */
+void audio_set_alert_volume(int percent);
+
+/**
+ * Set chime / briefing / notification playback volume (0 to 100).
+ */
+void audio_set_notification_volume(int percent);
+
+/**
+ * @deprecated Use audio_set_alert_volume().
  */
 void audio_set_volume(int percent);
 
 /**
- * Get current volume percentage.
+ * Returns current alert volume percentage.
  */
 int audio_get_volume(void);
 
@@ -50,6 +60,16 @@ void audio_play_eas_siren(int duration_sec);
  * Play a melodic chime.
  */
 void audio_play_chime(void);
+
+/**
+ * Short keyboard / button click (non-blocking background task).
+ */
+void audio_play_key_click(void);
+
+/**
+ * Short UI notification ping (non-blocking background task).
+ */
+void audio_play_notify(void);
 
 /**
  * Play morning weather briefing.

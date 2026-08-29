@@ -132,10 +132,9 @@ Elecrow's repository, not measured by hand or taken from the spec sheet:
 - **Board outline** 247.04 × 147.01 mm
 - **Mounting holes** M3.2, four corners, 3.1 mm in from each edge
   (240.9 × 141.0 mm pattern)
-- **Every connector position** — all measured, but only the two USB-C ports
-  are cut into an edge. `ALL_PORTS = false` near the top of the `.scad` opens
-  the rest if you ever want them. All of these are **back-view** x values, and
-  are mirrored by `mx()` before cutting:
+- **Every connector position** — all measured. `ALL_PORTS = true` near the top
+  of the `.scad` opens every connector; set it `false` for USB-C only. All of
+  these are **back-view** x values, and are mirrored by `mx()` before cutting:
   - Right edge: XH2.54 at y=41.3, USB-C at y=63.0 and y=84.0, power switch at y=100.9
   - Top edge: Grove at x=18.1 and x=40.1, GPIO headers at x=215.5 and x=231.0
   - Bottom edge: PH2.0 at x=35.8, 2×12 header at x=123.9, test points at
@@ -192,8 +191,9 @@ y = 100.9 is the power switch, as the PCB file always said.
 Worth knowing before you print, because both are sealed in once assembled:
 
 **The Grove connector at x=18.1** on the top edge, which is where the indoor
-temperature sensor plugs in. Its cable has nowhere to leave the case. Set
-`ALL_PORTS = true` and re-export the shell if you want it.
+temperature sensor plugs in. **`ALL_PORTS` defaults to `true`** in
+`tempest_stand.scad` so the Grove cutout is included. Set it `false` if you
+want a clean back with only the two USB-C ports.
 
 ## Printing
 

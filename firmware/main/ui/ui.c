@@ -11,6 +11,7 @@
 #include "net.h"
 #include "history.h"
 #include "audio.h"
+#include "nws_alerts.h"
 
 #include <math.h>
 #include <stdarg.h>
@@ -56,6 +57,13 @@ static const char *TAG = "ui";
 #define COL_ALERT       lv_color_hex(0xFF1744)
 #define COL_OK          lv_color_hex(0x00E676)
 #define COL_IDLE        lv_color_hex(0x475569)
+
+#define COL_AQI_GOOD    lv_color_hex(0x4CAF50)
+#define COL_AQI_MOD     lv_color_hex(0xFDD835)
+#define COL_AQI_USG     lv_color_hex(0xFB8C00)
+#define COL_AQI_BAD     lv_color_hex(0xE53935)
+
+#define LIGHTNING_NEAR_KM  9.656f   /* 6 miles */
 
 /* ---- geometry (1024 x 600) ---------------------------------------------- */
 #define SCR_W           1024
@@ -113,7 +121,10 @@ static const char *TAG = "ui";
 static lv_obj_t *hdr_dot, *hdr_station, *hdr_health, *hdr_date, *hdr_clock, *hdr_bat_icon;
 static lv_obj_t *s_main_screen;
 static ui_page_t s_current_page = UI_PAGE_DASHBOARD;
+static bool       s_ui_ready;
 static lv_obj_t *hdr_page_lbl;
+static lv_obj_t *hdr_aqi_dot, *hdr_aqi_lbl;
+static lv_obj_t *s_alert_banner, *s_alert_banner_lbl;
 
 /* Zone 1: Outdoor Temperature */
 static lv_obj_t *temp_val, *temp_feels_pill, *temp_dew_pill, *temp_hilo_lbl;
@@ -135,7 +146,7 @@ static lv_obj_t *in_comfort_badge, *in_status_lbl, *in_no_sensor_view;
 static lv_obj_t *in_temp_cap, *in_hum_cap;
 
 /* Zone 4: Current Conditions */
-static lv_obj_t *cond_icon, *cond_title, *cond_sub, *cond_badge;
+static lv_obj_t *cond_icon, *cond_title, *cond_sub, *cond_badge, *smart_pill;
 
 /* Mid 1: Rain & Precipitation */
 static lv_obj_t *rain_val, *rain_rate_lbl, *rain_cylinder_fill, *rain_badge;
@@ -173,6 +184,29 @@ static void on_page_btn(lv_event_t *e);
 static void on_toggle_units(lv_event_t *e);
 static void on_screen_swipe(lv_event_t *e);
 static void ui_sync_page_button_labels(void);
+
+static lv_color_t aqi_color(int aqi)
+{
+    if (aqi <= 50)  return COL_AQI_GOOD;
+    if (aqi <= 100) return COL_AQI_MOD;
+    if (aqi <= 150) return COL_AQI_USG;
+    return COL_AQI_BAD;
+}
+
+static void format_hour_label(char *buf, size_t len, int64_t epoch)
+{
+    if (epoch <= 0) {
+        snprintf(buf, len, "--:--");
+        return;
+    }
+    struct tm ht;
+    time_t ht_t = (time_t)epoch;
+    localtime_r(&ht_t, &ht);
+    strftime(buf, len, "%I:%M %p", &ht);
+    if (buf[0] == '0') {
+        memmove(buf, buf + 1, strlen(buf));
+    }
+}
 
 static lv_point_t s_swipe_start;
 static bool       s_swipe_active;
@@ -255,6 +289,10 @@ void ui_attach_swipe_nav(lv_obj_t *screen)
 
 static void on_screen_swipe(lv_event_t *e)
 {
+    if (!s_ui_ready) {
+        return;
+    }
+
     lv_indev_t *indev = lv_indev_active();
     if (!indev) {
         return;
@@ -533,6 +571,20 @@ static void build_header(lv_obj_t *scr)
     hdr_station = label(h, &lv_font_montserrat_14, COL_TEXT, "TEMPEST PRO");
     lv_obj_align(hdr_station, LV_ALIGN_LEFT_MID, 22, 0);
 
+    hdr_aqi_dot = lv_obj_create(h);
+    lv_obj_set_size(hdr_aqi_dot, 8, 8);
+    lv_obj_set_style_radius(hdr_aqi_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(hdr_aqi_dot, COL_AQI_GOOD, 0);
+    lv_obj_set_style_bg_opa(hdr_aqi_dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(hdr_aqi_dot, 0, 0);
+    lv_obj_clear_flag(hdr_aqi_dot, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(hdr_aqi_dot, LV_ALIGN_LEFT_MID, 132, 0);
+    lv_obj_add_flag(hdr_aqi_dot, LV_OBJ_FLAG_HIDDEN);
+
+    hdr_aqi_lbl = label(h, &lv_font_montserrat_14, COL_DIM, "AQI --");
+    lv_obj_align(hdr_aqi_lbl, LV_ALIGN_LEFT_MID, 144, 0);
+    lv_obj_add_flag(hdr_aqi_lbl, LV_OBJ_FLAG_HIDDEN);
+
     hdr_bat_icon = label(h, &lv_font_montserrat_14, COL_OK, LV_SYMBOL_BATTERY_FULL);
     lv_obj_align(hdr_bat_icon, LV_ALIGN_LEFT_MID, 204, 0);
 
@@ -566,6 +618,30 @@ static void build_header(lv_obj_t *scr)
     lv_obj_set_style_text_color(gl, COL_TEXT, 0);
     lv_obj_set_style_text_font(gl, &lv_font_montserrat_18, 0);
     lv_obj_center(gl);
+}
+
+static void build_alert_banner(lv_obj_t *scr)
+{
+    s_alert_banner = lv_obj_create(scr);
+    lv_obj_set_pos(s_alert_banner, PAD, HEAD_Y);
+    lv_obj_set_size(s_alert_banner, SCR_W - 2 * PAD, HEAD_H);
+    lv_obj_set_style_bg_color(s_alert_banner, COL_ALERT, 0);
+    lv_obj_set_style_bg_opa(s_alert_banner, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_alert_banner, 0, 0);
+    lv_obj_set_style_radius(s_alert_banner, 8, 0);
+    lv_obj_set_style_pad_all(s_alert_banner, 0, 0);
+    lv_obj_clear_flag(s_alert_banner, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_alert_banner_lbl = lv_label_create(s_alert_banner);
+    lv_label_set_text(s_alert_banner_lbl, LV_SYMBOL_WARNING " Weather Alert");
+    lv_obj_set_style_text_font(s_alert_banner_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_alert_banner_lbl, COL_TEXT, 0);
+    lv_obj_set_width(s_alert_banner_lbl, SCR_W - 2 * PAD - 16);
+    lv_label_set_long_mode(s_alert_banner_lbl, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_align(s_alert_banner_lbl, LV_ALIGN_LEFT_MID, 8, 0);
+
+    lv_obj_add_flag(s_alert_banner, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_alert_banner);
 }
 
 static void build_top_deck(lv_obj_t *scr)
@@ -737,7 +813,11 @@ static void build_top_deck(lv_obj_t *scr)
     }
 
     cond_title = clabel(z4, Z4_W / 2, 134, Z4_W - 12, &lv_font_montserrat_24, COL_TEXT, "Clear");
-    cond_sub = clabel(z4, Z4_W / 2, 172, Z4_W - 12, &lv_font_montserrat_16, COL_DIM, "Today: Hi --°  Lo --°");
+    cond_sub = clabel(z4, Z4_W / 2, 168, Z4_W - 12, &lv_font_montserrat_14, COL_DIM, "Today: Hi --°  Lo --°");
+
+    smart_pill = make_pill(z4, 8, 196, Z4_W - 16, 26, COL_WIND_NEON, COL_TEXT, "Checking forecast...");
+    lv_obj_set_width(smart_pill, Z4_W - 28);
+    lv_label_set_long_mode(smart_pill, LV_LABEL_LONG_DOT);
 }
 
 static void build_mid_deck(lv_obj_t *scr)
@@ -1015,6 +1095,7 @@ esp_err_t ui_init(void)
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
     build_header(scr);
+    build_alert_banner(scr);
     build_top_deck(scr);
     build_mid_deck(scr);
     build_forecast_deck(scr);
@@ -1025,6 +1106,11 @@ esp_err_t ui_init(void)
     wifi_setup_init();
 
     ui_attach_swipe_nav(s_main_screen);
+
+    s_current_page = UI_PAGE_DASHBOARD;
+    lv_screen_load(s_main_screen);
+    lv_obj_invalidate(s_main_screen);
+    s_ui_ready = true;
 
     ESP_LOGI(TAG, "commercial weather console built (%dx%d)", SCR_W, SCR_H);
     return ESP_OK;
@@ -1042,6 +1128,125 @@ static void set_text(lv_obj_t *l, const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
     lv_label_set_text(l, buf);
+}
+
+static void update_hdr_aqi(const wx_state_t *s)
+{
+    if (s->aqi_valid && s->aqi_val > 0) {
+        lv_color_t ac = aqi_color(s->aqi_val);
+        lv_obj_clear_flag(hdr_aqi_dot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(hdr_aqi_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_color(hdr_aqi_dot, ac, 0);
+        set_text(hdr_aqi_lbl, "AQI %d", s->aqi_val);
+        lv_obj_set_style_text_color(hdr_aqi_lbl, ac, 0);
+    } else {
+        lv_obj_add_flag(hdr_aqi_dot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(hdr_aqi_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void update_alert_banner(const wx_state_t *s, int64_t now)
+{
+    nws_alert_t alert = {0};
+    bool nws = nws_alerts_get_active(&alert);
+
+    bool ltg_near = s->last_strike_epoch > 0 &&
+                    s->last_strike_dist_km > 0.0f &&
+                    s->last_strike_dist_km <= LIGHTNING_NEAR_KM &&
+                    (now - s->last_strike_epoch) < 3 * 3600;
+
+    if (nws) {
+        char buf[192];
+        snprintf(buf, sizeof(buf), "%s %.32s",
+                 LV_SYMBOL_WARNING, alert.event);
+        lv_label_set_text(s_alert_banner_lbl, buf);
+        lv_obj_set_style_bg_color(s_alert_banner,
+            strcmp(alert.severity, "Extreme") == 0 ? COL_ALERT : COL_TEMP_AMBER, 0);
+        lv_obj_clear_flag(s_alert_banner, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_alert_banner);
+    } else if (ltg_near) {
+        float dist = cfg_distance(s->last_strike_dist_km);
+        int mins = (int)((now - s->last_strike_epoch) / 60);
+        if (mins < 1) {
+            mins = 1;
+        }
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+                 LV_SYMBOL_WARNING " Lightning %.1f %s away — %d min ago",
+                 (double)dist, cfg_distance_suffix(), mins);
+        lv_label_set_text(s_alert_banner_lbl, buf);
+        lv_obj_set_style_bg_color(s_alert_banner, COL_TEMP_AMBER, 0);
+        lv_obj_clear_flag(s_alert_banner, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_alert_banner);
+    } else {
+        lv_obj_add_flag(s_alert_banner, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void update_smart_pill(const wx_state_t *s)
+{
+    char msg[96];
+    lv_color_t border = COL_WIND_NEON;
+    lv_color_t text = COL_TEXT;
+
+    if (s->obs_valid && s->rain_rate_mm_hr > 0.05f) {
+        char rate[16];
+        snprintf(rate, sizeof(rate), cfg_rain_fmt(), (double)U_RAIN(s->rain_rate_mm_hr));
+        snprintf(msg, sizeof(msg), "Rain falling now at %s %s/hr", rate, U_RAIN_SUF);
+        border = COL_RAIN_NEON;
+    } else if (s->hourly_valid && s->hourly_count > 0) {
+        int rain_start = -1;
+        for (int i = 0; i < s->hourly_count; i++) {
+            if (s->hourly[i].precip_probability >= 40) {
+                rain_start = i;
+                break;
+            }
+        }
+        if (rain_start >= 0) {
+            char hr[16];
+            format_hour_label(hr, sizeof(hr), s->hourly[rain_start].hour_epoch);
+            snprintf(msg, sizeof(msg), "Rain likely around %s (%d%%)",
+                     hr, s->hourly[rain_start].precip_probability);
+            border = COL_RAIN_NEON;
+        } else if (s->comfort_mode == WX_COMFORT_HEAT_INDEX &&
+                   (strcmp(s->comfort_risk, "Danger") == 0 ||
+                    strcmp(s->comfort_risk, "Extreme Danger") == 0)) {
+            snprintf(msg, sizeof(msg), "Heat index %s — take it easy", s->comfort_risk);
+            border = COL_TEMP_HOT;
+            text = COL_TEMP_AMBER;
+        } else if (s->pressure_trend == WX_TREND_FALLING_FAST) {
+            snprintf(msg, sizeof(msg), "Pressure falling fast — storms possible");
+            border = COL_PRESS_NEON;
+        } else if (s->aqi_valid && s->aqi_val > 100) {
+            snprintf(msg, sizeof(msg), "AQI %d — %s", s->aqi_val, s->aqi_category);
+            border = aqi_color(s->aqi_val);
+        } else if (s->current_conditions[0]) {
+            snprintf(msg, sizeof(msg), "%s", s->current_conditions);
+            border = COL_SUN_GOLD;
+        } else {
+            snprintf(msg, sizeof(msg), "All clear — no advisories");
+            border = COL_OK;
+            text = COL_DIM;
+        }
+    } else if (s->comfort_mode == WX_COMFORT_WIND_CHILL &&
+               strcmp(s->comfort_risk, "Danger") == 0) {
+        snprintf(msg, sizeof(msg), "Wind chill %s — dress warm", s->comfort_risk);
+        border = COL_TEMP_COLD;
+    } else if (s->current_conditions[0]) {
+        snprintf(msg, sizeof(msg), "%s", s->current_conditions);
+        border = COL_SUN_GOLD;
+    } else {
+        snprintf(msg, sizeof(msg), "Waiting for forecast data...");
+        border = COL_DIM;
+        text = COL_DIM;
+    }
+
+    lv_label_set_text(smart_pill, msg);
+    lv_obj_t *pill = lv_obj_get_parent(smart_pill);
+    if (pill) {
+        lv_obj_set_style_border_color(pill, border, 0);
+    }
+    lv_obj_set_style_text_color(smart_pill, text, 0);
 }
 
 static void update_header(const wx_state_t *s, int64_t now)
@@ -1083,6 +1288,8 @@ static void update_header(const wx_state_t *s, int64_t now)
             lv_obj_set_style_text_color(hdr_bat_icon, COL_ALERT, 0);
         }
     }
+
+    update_hdr_aqi(s);
 }
 
 static void update_top_deck(const wx_state_t *s, int64_t now)
@@ -1545,9 +1752,11 @@ void ui_tick(void)
     wx_snapshot(&s);
 
     update_header(&s, now);
+    update_alert_banner(&s, now);
     update_top_deck(&s, now);
     update_mid_deck(&s, now);
     update_forecast_deck(&s);
+    update_smart_pill(&s);
 
     audio_scheduler_tick(now, s.current_icon);
 }
