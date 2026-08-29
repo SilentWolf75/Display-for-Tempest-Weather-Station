@@ -138,7 +138,7 @@ build date, running slot, and free heap, with an upload form.
 Scripted:
 
 ```bash
-curl -X POST --data-binary @firmware/build/tempest_display.bin -H "X-OTA-Password: yourpassword" http://192.168.1.50/update
+curl -X POST --data-binary @firmware/build/tempest_display.bin -H "X-OTA-Password: yourpassword" http://192.168.1.50:8080/ota/update
 ```
 
 **Set `CONFIG_OTA_PASSWORD` in menuconfig.** Empty means anyone on your network

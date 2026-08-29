@@ -12,6 +12,9 @@
 #include "history.h"
 #include "audio.h"
 #include "nws_alerts.h"
+#include "ota.h"
+
+#include "sdkconfig.h"
 
 #include <math.h>
 #include <stdarg.h>
@@ -212,6 +215,19 @@ static lv_point_t s_swipe_start;
 static bool       s_swipe_active;
 static bool       s_swipe_handled;
 
+static uint32_t   s_last_input_ms;
+static bool       s_screensaver_active;
+static uint8_t    s_scheduled_brightness;
+
+void ui_note_user_activity(void)
+{
+    s_last_input_ms = lv_tick_get();
+    if (s_screensaver_active) {
+        s_screensaver_active = false;
+        display_set_brightness(s_scheduled_brightness);
+    }
+}
+
 /* ======================================================================== */
 /* ---- HELPER BUILDERS --------------------------------------------------- */
 /* ======================================================================== */
@@ -302,6 +318,7 @@ static void on_screen_swipe(lv_event_t *e)
     lv_indev_get_point(indev, &p);
 
     if (lv_event_get_code(e) == LV_EVENT_PRESSED) {
+        ui_note_user_activity();
         s_swipe_start = p;
         s_swipe_active = true;
         s_swipe_handled = false;
@@ -1070,19 +1087,46 @@ static void on_page_btn(lv_event_t *e)
 
 static void apply_brightness(int64_t now)
 {
-    static int last_hour = -1;
-    if (now < 1700000000LL && !net_time_is_valid()) {
-        return;
+    if (settings_is_visible() || wifi_setup_is_visible() || ota_in_progress()) {
+        ui_note_user_activity();
     }
-    time_t t = (time_t)now;
-    struct tm lt;
-    localtime_r(&t, &lt);
-    if (lt.tm_hour == last_hour) {
-        return;
-    }
-    last_hour = lt.tm_hour;
 
-    display_set_brightness(cfg_brightness_now());
+    uint8_t target = cfg_brightness_now();
+    if (now >= 1700000000LL || net_time_is_valid()) {
+        static int last_hour = -1;
+        time_t t = (time_t)now;
+        struct tm lt;
+        localtime_r(&t, &lt);
+        if (lt.tm_hour != last_hour) {
+            last_hour = lt.tm_hour;
+            target = cfg_brightness_now();
+        }
+    }
+    s_scheduled_brightness = target;
+
+#if CONFIG_SCREENSAVER_IDLE_MIN > 0
+    if (!settings_is_visible() && !wifi_setup_is_visible() && !ota_in_progress()) {
+        uint32_t idle_ms = lv_tick_get() - s_last_input_ms;
+        uint32_t limit_ms = (uint32_t)CONFIG_SCREENSAVER_IDLE_MIN * 60U * 1000U;
+        if (idle_ms >= limit_ms) {
+            if (!s_screensaver_active) {
+                s_screensaver_active = true;
+                ESP_LOGI(TAG, "screensaver on (%d min idle)", CONFIG_SCREENSAVER_IDLE_MIN);
+            }
+            target = (uint8_t)CONFIG_SCREENSAVER_BRIGHTNESS;
+        }
+    }
+#endif
+
+    if (s_screensaver_active) {
+        target = (uint8_t)CONFIG_SCREENSAVER_BRIGHTNESS;
+    }
+
+    static uint8_t last_applied;
+    if (target != last_applied) {
+        last_applied = target;
+        display_set_brightness(target);
+    }
 }
 
 esp_err_t ui_init(void)
@@ -1111,6 +1155,8 @@ esp_err_t ui_init(void)
     lv_screen_load(s_main_screen);
     lv_obj_invalidate(s_main_screen);
     s_ui_ready = true;
+    s_last_input_ms = lv_tick_get();
+    s_scheduled_brightness = cfg_brightness_now();
 
     ESP_LOGI(TAG, "commercial weather console built (%dx%d)", SCR_W, SCR_H);
     return ESP_OK;
@@ -1197,6 +1243,10 @@ static void update_smart_pill(const wx_state_t *s)
         snprintf(msg, sizeof(msg), "Station data %d min old", mins);
         border = COL_TEMP_AMBER;
         text = COL_TEMP_AMBER;
+    } else if (s->forecast_valid && wx_forecast_is_stale(s)) {
+        snprintf(msg, sizeof(msg), "Forecast outdated — check Wi-Fi");
+        border = COL_TEMP_AMBER;
+        text = COL_DIM;
     } else if (s->obs_valid && s->rain_rate_mm_hr > 0.05f) {
         char rate[16];
         snprintf(rate, sizeof(rate), cfg_rain_fmt(), (double)U_RAIN(s->rain_rate_mm_hr));
@@ -1775,6 +1825,13 @@ static void update_forecast_deck(const wx_state_t *s)
             if (f_cur > 1.0f) f_cur = 1.0f;
             int dot_x = (int)(f_cur * bar_total_w) - 4;
             lv_obj_set_pos(fc[i].bar_dot, dot_x, -1);
+        }
+    }
+
+    lv_opa_t f_opa = (has_fcst && wx_forecast_is_stale(s)) ? LV_OPA_40 : LV_OPA_COVER;
+    for (int i = 0; i < FC_COLS; i++) {
+        if (fc[i].card) {
+            lv_obj_set_style_opa(fc[i].card, f_opa, 0);
         }
     }
 }

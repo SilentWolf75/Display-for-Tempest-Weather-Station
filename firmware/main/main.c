@@ -143,10 +143,6 @@ void app_main(void)
     diag_report_network();
 #endif
 
-#if CONFIG_OTA_ENABLED
-    ota_start();
-#endif
-
     /* --- live data --- */
     ESP_ERROR_CHECK(tempest_udp_start());
 #endif
@@ -178,6 +174,11 @@ void app_main(void)
     if (cfg_boot.web_server_enabled) {
         web_server_start();
     }
+#if CONFIG_OTA_ENABLED
+    else {
+        ota_start();
+    }
+#endif
     /* Task stays idle until mqtt_enabled is true in settings. */
     mqtt_app_start();
 

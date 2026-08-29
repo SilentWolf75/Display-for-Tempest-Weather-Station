@@ -423,6 +423,23 @@ bool wx_udp_is_stale(const wx_state_t *s)
     return (now - s->last_udp_epoch) > CONFIG_TEMPEST_OBS_STALE_S;
 }
 
+#define FORECAST_STALE_S  (12 * 3600)
+
+bool wx_forecast_is_stale(const wx_state_t *s)
+{
+    if (!s->forecast_valid || s->forecast_days <= 0) {
+        return true;
+    }
+    if (s->forecast_fetched_epoch <= 0) {
+        return true;
+    }
+    int64_t now = (int64_t)time(NULL);
+    if (now < 1600000000LL) {
+        return false;
+    }
+    return (now - s->forecast_fetched_epoch) > FORECAST_STALE_S;
+}
+
 bool wx_indoor_is_stale(const wx_state_t *s)
 {
     if (!s->indoor_valid) {

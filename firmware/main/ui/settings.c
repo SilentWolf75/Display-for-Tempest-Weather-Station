@@ -1,6 +1,7 @@
 #include "settings.h"
 #include "config.h"
 #include "wx_state.h"
+#include "ui.h"
 #include "net.h"
 #include "display.h"
 #include "tempest_udp.h"
@@ -491,6 +492,13 @@ static void on_reboot(lv_event_t *e)
     esp_restart();
 }
 
+static void on_settings_activity(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_PRESSED) {
+        ui_note_user_activity();
+    }
+}
+
 /* ------------------------------------------------------------------------ */
 
 esp_err_t settings_init(void)
@@ -882,6 +890,8 @@ esp_err_t settings_init(void)
     lv_obj_set_size(w_kb, 400, 200);
     lv_obj_align(w_kb, LV_ALIGN_BOTTOM_MID, 0, -10);
     lv_obj_add_flag(w_kb, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_add_event_cb(s_screen, on_settings_activity, LV_EVENT_PRESSED, NULL);
 
     return ESP_OK;
 }

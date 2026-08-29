@@ -4,6 +4,7 @@
 #include "net.h"
 #include "audio.h"
 #include "sdcard.h"
+#include "ota.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -87,6 +88,8 @@ static const char HTML_PAGE[] =
 "<div class='card'><div class='label'>Station Health</div><div class='val' id='battery'>-- V</div><div class='sub' id='hub_rssi'>Hub RSSI: -- dBm</div></div>"
 "<div class='card'><div class='label'>Indoor</div><div class='val' id='indoor_temp'>--°</div><div class='sub' id='indoor_hum'>Humidity --%</div></div>"
 "</div>"
+"<p style='font-size:13px;color:var(--dim);margin-top:12px'>"
+"<a href='/ota' style='color:var(--accent)'>Firmware update</a></p>"
 "<script>"
 "async function update(){"
 "try{"
@@ -163,6 +166,7 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     }
     cJSON_AddNumberToObject(root, "forecast_days", s.forecast_days);
     cJSON_AddBoolToObject(root, "forecast_valid", s.forecast_valid);
+    cJSON_AddBoolToObject(root, "forecast_stale", wx_forecast_is_stale(&s));
 
     sdcard_info_t sdi;
     if (sdcard_get_info(&sdi) == ESP_OK && sdi.mounted) {
@@ -246,6 +250,10 @@ esp_err_t web_server_start(void)
     httpd_register_uri_handler(s_server, &chime_uri);
 
     mdns_start();
+
+#if CONFIG_OTA_ENABLED
+    ota_register(s_server);
+#endif
 
     char ip[16];
     if (net_get_ip(ip, sizeof(ip))) {

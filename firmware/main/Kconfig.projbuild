@@ -70,8 +70,26 @@ menu "Tempest Weather Display"
         bool "Enable over-the-air updates"
         default y
         help
-            Serves a firmware upload page on port 80. Worth having on a panel
-            that is going to live on a wall.
+            Serves a firmware upload form at /ota on the web dashboard
+            (port 8080). If the dashboard is disabled, falls back to a
+            standalone server on port 80.
+
+    config SCREENSAVER_IDLE_MIN
+        int "Screensaver idle timeout (minutes, 0=off)"
+        default 10
+        range 0 120
+        help
+            After this many minutes without touch input the backlight drops
+            to SCREENSAVER_BRIGHTNESS to reduce burn-in on a 24/7 panel.
+
+    config SCREENSAVER_BRIGHTNESS
+        int "Screensaver backlight (percent)"
+        default 5
+        range 0 20
+        depends on SCREENSAVER_IDLE_MIN > 0
+        help
+            Backlight level while the screensaver is active. Touch anywhere
+            to restore the normal day/night brightness.
 
     config OTA_PASSWORD
         string "OTA shared secret (X-OTA-Password header)"

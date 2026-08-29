@@ -74,7 +74,7 @@ static esp_err_t root_get(httpd_req_t *req)
         "<dt>running<dd>%s"
         "<dt>free heap<dd>%u KB internal, %u KB PSRAM"
         "</dl>"
-        "<form method=post action=/update enctype=multipart/form-data>"
+        "<form method=post action=/ota/update enctype=multipart/form-data>"
         "<label>Firmware image (.bin)</label><br>"
         "<input type=file name=f accept=.bin required><br>"
         "%s"
@@ -237,6 +237,41 @@ static esp_err_t update_post(httpd_req_t *req)
     return ESP_OK;     /* not reached */
 }
 
+static bool s_registered;
+
+esp_err_t ota_register(httpd_handle_t server)
+{
+    if (!server) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_registered) {
+        return ESP_OK;
+    }
+
+    httpd_uri_t page = { .uri = "/ota", .method = HTTP_GET,
+                         .handler = root_get };
+    httpd_uri_t upd  = { .uri = "/ota/update", .method = HTTP_POST,
+                         .handler = update_post };
+    esp_err_t err = httpd_register_uri_handler(server, &page);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = httpd_register_uri_handler(server, &upd);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    s_registered = true;
+    s_server = server;
+
+    if (CONFIG_OTA_PASSWORD[0] == '\0') {
+        ESP_LOGW(TAG, "OTA upload has NO password — anyone on the LAN can reflash");
+    } else {
+        ESP_LOGI(TAG, "OTA upload at /ota/update (password required)");
+    }
+    return ESP_OK;
+}
+
 esp_err_t ota_start(void)
 {
     if (s_server) {
@@ -246,7 +281,6 @@ esp_err_t ota_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
     cfg.stack_size       = 8192;
-    /* A 3 MB upload over a proxied SDIO Wi-Fi link is not fast. */
     cfg.recv_wait_timeout = 30;
     cfg.send_wait_timeout = 30;
 
@@ -256,19 +290,13 @@ esp_err_t ota_start(void)
         return err;
     }
 
-    httpd_uri_t root = { .uri = "/", .method = HTTP_GET,
-                         .handler = root_get };
-    httpd_uri_t upd  = { .uri = "/update", .method = HTTP_POST,
-                         .handler = update_post };
-    httpd_register_uri_handler(s_server, &root);
-    httpd_register_uri_handler(s_server, &upd);
-
-    if (CONFIG_OTA_PASSWORD[0] == '\0') {
-        ESP_LOGW(TAG, "OTA server is running WITHOUT a password.");
-        ESP_LOGW(TAG, "Anyone on this network can reflash this device.");
-        ESP_LOGW(TAG, "Set CONFIG_OTA_PASSWORD in menuconfig.");
-    } else {
-        ESP_LOGI(TAG, "OTA server running, password required");
+    err = ota_register(s_server);
+    if (err != ESP_OK) {
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
     }
+
+    ESP_LOGI(TAG, "standalone OTA server on port 80 (legacy)");
     return ESP_OK;
 }

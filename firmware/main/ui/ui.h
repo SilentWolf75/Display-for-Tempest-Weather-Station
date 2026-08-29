@@ -41,3 +41,6 @@ lv_obj_t *ui_create_page_button(lv_obj_t *parent, lv_align_t align, int x_ofs, i
  * roughly once a second -- rapid_wind only lands every 3 s, so faster gains
  * nothing but the clock wants a per-second tick. */
 void ui_tick(void);
+
+/* Call on touch or button press so the screensaver backs off. */
+void ui_note_user_activity(void);
