@@ -60,22 +60,22 @@ and then silently carries no data, which cost most of a day.
 
 ## Milestone 4 — UI  ✅ running on hardware
 
-Gauge-based layout, 1024x600 landscape. Three-page navigation: dashboard,
-Night & Insights, and 24 h trend graphs.
+Gauge-based layout, 1024x600 landscape. Five swipe pages: LIVE, SKY, WEEK,
+24H, ALERTS. Settings is a gear overlay. A bottom ticker is on every page.
 
 Implemented on hardware:
 
 - Live wind dial driven by `rapid_wind` at 3 s
-- Lightning alert banner on the header strip (NWS warnings take priority)
-- Smart weather insight pill on the conditions card
-- EPA AQI badge in the header when AirNow data is available
+- NWS warnings on the global ticker (lightning when no alert)
+- Official NWS `shortForecast` on SKY / WEEK / ALERTS / idle ticker
+- Outdoor EPA AQI badge (Open-Meteo `us_aqi` for the zip — not indoor)
 - Heat index / wind chill smart-pill on the temperature card
 - All LVGL calls wrapped in `display_lock()` / `display_unlock()`
 
 ## Milestone 5b — Trend graphs  ✅ done
 
 Third screen, 2x2: temperature, pressure, wind (average + gust), humidity.
-Reached by swiping or the page button in the header.
+Reached by swiping to **24H** or tapping the page dots.
 
 - **History is local**, in `history.c`: 288 five-minute buckets covering 24 h,
   ~13 KB in PSRAM, fed from every `obs_st`. Same rule as the rest of the
@@ -110,3 +110,6 @@ Reached by swiping or the page button in the header.
 ## Open questions
 
 - Wall-mounted or desk? The case in `case/` is a desk stand; wall mount is not designed yet.
+- Radar imagery: NWS `api.weather.gov` does not serve tiles. RainViewer or a
+  NEXRAD WMS host plus a PNG decoder would be a new page; nearest site id is
+  already cached from `/points`.

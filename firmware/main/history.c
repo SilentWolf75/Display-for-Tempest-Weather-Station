@@ -115,6 +115,7 @@ static float bucket_value(const bucket_t *b, hist_series_t series)
     case HIST_PRESSURE: return (float)(b->pressure_sum / n);
     case HIST_WIND:     return (float)(b->wind_sum / n);
     case HIST_HUMIDITY: return (float)(b->humidity_sum / n);
+    case HIST_RAIN:     return (float)b->rain_sum;
     default:            return NAN;
     }
 }

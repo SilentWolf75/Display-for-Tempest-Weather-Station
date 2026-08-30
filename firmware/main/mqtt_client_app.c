@@ -133,6 +133,9 @@ static void publish_state(void)
 
     char *payload = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
+    if (!payload) {
+        return;
+    }
 
     esp_mqtt_client_publish(s_mqtt_client, "tempest/state", payload, 0, 0, 0);
     free(payload);
@@ -239,7 +242,7 @@ esp_err_t mqtt_app_start(void)
         return ESP_OK;
     }
     s_task_started = true;
-    if (xTaskCreate(mqtt_loop_task, "mqtt_task", 6 * 1024, NULL, 3,
+    if (xTaskCreate(mqtt_loop_task, "mqtt_task", 12 * 1024, NULL, 3,
                     &s_mqtt_task_handle) != pdPASS) {
         s_task_started = false;
         return ESP_ERR_NO_MEM;
@@ -255,4 +258,9 @@ void mqtt_app_stop(void)
 void mqtt_app_reconnect(void)
 {
     mqtt_disconnect();
+}
+
+bool mqtt_app_is_connected(void)
+{
+    return s_connected;
 }

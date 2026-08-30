@@ -33,6 +33,21 @@ uint8_t display_get_brightness(void);
 /* Invalidate the active screen and poke the LVGL task to flush now. */
 void display_refresh_now(void);
 
+/* Thread-safe. After a burst of SDIO traffic (HTTPS forecast, C6 Wi-Fi)
+ * the MIPI path can drop while the backlight stays on. Re-assert PWM and
+ * ask the LVGL task to wake the panel and repaint. `reason` must be a
+ * literal — it is only logged. */
+void display_recover_after_sdio(const char *reason);
+
+/* LVGL-thread only (lock already held). Returns true if a recover was
+ * pending; caller should invalidate the active screen. */
+bool display_apply_recover_request(void);
+
+/* Indoor I2C stands down while HTTPS is on the C6 SDIO link. Nested. */
+void display_https_begin(void);
+void display_https_end(void);
+bool display_https_busy(void);
+
 /* The I2C bus the touch controller sits on. Shared with the Grove header,
  * so the indoor sensor attaches to this rather than creating a second
  * master on the same two pins. NULL if display_init() has not run or the

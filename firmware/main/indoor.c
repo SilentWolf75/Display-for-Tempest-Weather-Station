@@ -39,20 +39,41 @@ static indoor_sensor_t         s_type;
  * AHT20 / DHT20
  * -------------------------------------------------------------------------- */
 
+/* GT911 is polled from the LVGL task on this same bus. Take the LVGL
+ * lock around each transaction so the two never overlap. Do not hold it
+ * across the conversion delay — that would hitch the UI for 80 ms. */
+static bool i2c_grab(void)
+{
+    return display_lock(200);
+}
+
+static void i2c_drop(void)
+{
+    display_unlock();
+}
+
 static esp_err_t aht20_init(void)
 {
     /* Datasheet wants 40 ms after power-up before the status byte is valid. */
     vTaskDelay(pdMS_TO_TICKS(40));
 
     uint8_t status = 0;
+    if (!i2c_grab()) {
+        return ESP_ERR_TIMEOUT;
+    }
     esp_err_t err = i2c_master_receive(s_dev, &status, 1, 200);
+    i2c_drop();
     if (err != ESP_OK) {
         return err;
     }
     /* Bit 3 set means calibrated. A fresh part needs the init command. */
     if ((status & 0x08) == 0) {
         const uint8_t init_cmd[3] = { 0xBE, 0x08, 0x00 };
+        if (!i2c_grab()) {
+            return ESP_ERR_TIMEOUT;
+        }
         err = i2c_master_transmit(s_dev, init_cmd, sizeof(init_cmd), 200);
+        i2c_drop();
         if (err != ESP_OK) {
             return err;
         }
@@ -65,7 +86,11 @@ static esp_err_t aht20_init(void)
 static esp_err_t aht20_read(float *temp_c, float *humidity)
 {
     const uint8_t measure[3] = { 0xAC, 0x33, 0x00 };
+    if (!i2c_grab()) {
+        return ESP_ERR_TIMEOUT;
+    }
     esp_err_t err = i2c_master_transmit(s_dev, measure, sizeof(measure), 200);
+    i2c_drop();
     if (err != ESP_OK) {
         return err;
     }
@@ -73,7 +98,11 @@ static esp_err_t aht20_read(float *temp_c, float *humidity)
     vTaskDelay(pdMS_TO_TICKS(80));
 
     uint8_t d[7] = {0};
+    if (!i2c_grab()) {
+        return ESP_ERR_TIMEOUT;
+    }
     err = i2c_master_receive(s_dev, d, sizeof(d), 200);
+    i2c_drop();
     if (err != ESP_OK) {
         return err;
     }
@@ -100,14 +129,22 @@ static esp_err_t aht20_read(float *temp_c, float *humidity)
 static esp_err_t sht4x_read(float *temp_c, float *humidity)
 {
     const uint8_t measure = 0xFD;      /* high repeatability, no heater */
+    if (!i2c_grab()) {
+        return ESP_ERR_TIMEOUT;
+    }
     esp_err_t err = i2c_master_transmit(s_dev, &measure, 1, 200);
+    i2c_drop();
     if (err != ESP_OK) {
         return err;
     }
     vTaskDelay(pdMS_TO_TICKS(10));
 
     uint8_t d[6] = {0};
+    if (!i2c_grab()) {
+        return ESP_ERR_TIMEOUT;
+    }
     err = i2c_master_receive(s_dev, d, sizeof(d), 200);
+    i2c_drop();
     if (err != ESP_OK) {
         return err;
     }
@@ -154,14 +191,26 @@ static float indoor_heat_correction_c(void)
 
 static indoor_sensor_t probe(i2c_master_bus_handle_t bus)
 {
-    if (i2c_master_probe(bus, AHT20_ADDR, PROBE_TIMEOUT) == ESP_OK) {
+    bool locked = i2c_grab();
+    esp_err_t aht = locked ? i2c_master_probe(bus, AHT20_ADDR, PROBE_TIMEOUT)
+                           : ESP_ERR_TIMEOUT;
+    if (locked) {
+        i2c_drop();
+    }
+    if (aht == ESP_OK) {
         if (attach(bus, AHT20_ADDR) == ESP_OK && aht20_init() == ESP_OK) {
             ESP_LOGI(TAG, "AHT20/DHT20 found at 0x%02X", AHT20_ADDR);
             return INDOOR_SENSOR_AHT20;
         }
         detach();
     }
-    if (i2c_master_probe(bus, SHT4X_ADDR, PROBE_TIMEOUT) == ESP_OK) {
+    locked = i2c_grab();
+    esp_err_t sht = locked ? i2c_master_probe(bus, SHT4X_ADDR, PROBE_TIMEOUT)
+                           : ESP_ERR_TIMEOUT;
+    if (locked) {
+        i2c_drop();
+    }
+    if (sht == ESP_OK) {
         if (attach(bus, SHT4X_ADDR) == ESP_OK) {
             ESP_LOGI(TAG, "SHT4x found at 0x%02X", SHT4X_ADDR);
             return INDOOR_SENSOR_SHT4X;
@@ -176,10 +225,11 @@ static void indoor_task(void *arg)
     i2c_master_bus_handle_t bus = (i2c_master_bus_handle_t)arg;
 
     while (1) {
-        if (wifi_setup_is_visible() || settings_is_visible()) {
-            /* GT911 and the Grove sensor share this bus. Polling the AHT20
-             * while settings/Wi-Fi overlays are up has hung touch reads. */
-            vTaskDelay(pdMS_TO_TICKS(1000));
+        if (wifi_setup_is_visible() || settings_is_visible() ||
+            display_https_busy()) {
+            /* Stand down while touch is in an overlay, and while HTTPS is
+             * riding the C6 SDIO link — that burst has wedged this bus. */
+            vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }
 
@@ -221,7 +271,9 @@ static void indoor_task(void *arg)
                          (double)t_cal, (double)t, (double)h);
             }
         } else {
-            ESP_LOGW(TAG, "read failed: %s; will re-probe", esp_err_to_name(err));
+            ESP_LOGW(TAG, "read failed: %s; resetting bus and re-probing",
+                     esp_err_to_name(err));
+            display_recover_after_sdio("indoor");
             detach();
             s_type = INDOOR_SENSOR_NONE;
         }

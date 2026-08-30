@@ -24,6 +24,10 @@ esp_err_t net_wifi_begin(void);
 void net_schedule_wifi_begin(void);
 
 bool net_is_connected(void);
+
+/* Blocks until STA has an IP, or timeout_ms elapses. */
+bool net_wait_connected(uint32_t timeout_ms);
+
 int8_t net_get_rssi(void);
 
 /* One scanned access point. */

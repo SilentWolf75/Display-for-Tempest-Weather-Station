@@ -4,6 +4,7 @@
 
 #include "esp_log.h"
 #include "esp_check.h"
+#include <string.h>
 #include "driver/i2c_master.h"
 #include "driver/ledc.h"
 #include "driver/gpio.h"
@@ -13,6 +14,10 @@
 #include "esp_lcd_ek79007.h"
 #include "esp_lcd_touch_gt911.h"
 #include "esp_lvgl_port.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 
 static const char *TAG = "display";
 
@@ -43,6 +48,12 @@ static lv_display_t              *s_disp;
 static bool                       s_backlight_ready;
 static bool                       s_backlight_pwm;
 static uint8_t                    s_brightness_pct = 100;
+static volatile bool              s_recover_req;
+static const char                *s_recover_reason;
+static bool                       s_recover_i2c;
+static volatile int               s_https_busy;
+static SemaphoreHandle_t          s_https_mux;
+static bool                       s_https_holds_lvgl;
 
 static esp_err_t init_backlight(void)
 {
@@ -129,6 +140,11 @@ void display_set_brightness(int percent)
     if (percent > 100) {
         percent = 100;
     }
+    /* Below ~50% this EK79007 looks unpowered. 0 is still allowed for
+     * an intentional off; everything else stays readable. */
+    if (percent > 0 && percent < 50) {
+        percent = 50;
+    }
 
     if (!s_backlight_pwm) {
         const int on = (percent >= 5);
@@ -139,10 +155,6 @@ void display_set_brightness(int percent)
 #endif
         s_brightness_pct = on ? 100 : 0;
         return;
-    }
-
-    if (percent < 60) {
-        percent = 75; /* Guarantee solid bright backlight always */
     }
 
     s_brightness_pct = (uint8_t)percent;
@@ -162,6 +174,117 @@ void display_set_brightness(int percent)
 uint8_t display_get_brightness(void)
 {
     return s_brightness_pct;
+}
+
+void display_recover_after_sdio(const char *reason)
+{
+    s_recover_reason = reason;
+    /* I2C reset only when the indoor task actually lost the bus. Resetting
+     * GT911 after every HTTPS poll is what wedged the panel into the
+     * backlight-on / no-pixels (light-blue) state. */
+    s_recover_i2c = (reason && strcmp(reason, "indoor") == 0);
+    s_recover_req = true;
+    uint8_t b = s_brightness_pct < 75 ? 75 : s_brightness_pct;
+    display_set_brightness(b);
+
+    ESP_LOGW(TAG, "panel recover requested after %s (backlight %u%%)",
+             reason ? reason : "sdio", (unsigned)b);
+}
+
+void display_https_begin(void)
+{
+    if (s_https_mux) {
+        xSemaphoreTake(s_https_mux, portMAX_DELAY);
+    }
+    if (s_https_busy++ == 0) {
+        /* Freeze LVGL (and GT911) so MIPI DMA is idle while the C6 SDIO
+         * link is busy. A frozen last frame is far better than a blank
+         * backlight-on panel. Recursive, so a settings-button refresh is safe. */
+        if (lvgl_port_lock(15000)) {
+            s_https_holds_lvgl = true;
+        } else {
+            ESP_LOGW(TAG, "https: could not pause LVGL");
+        }
+    }
+    if (s_https_mux) {
+        xSemaphoreGive(s_https_mux);
+    }
+}
+
+void display_https_end(void)
+{
+    if (s_https_mux) {
+        xSemaphoreTake(s_https_mux, portMAX_DELAY);
+    }
+    if (s_https_busy > 0) {
+        s_https_busy--;
+    }
+    if (s_https_busy == 0 && s_https_holds_lvgl) {
+        s_https_holds_lvgl = false;
+        lvgl_port_unlock();
+        display_recover_after_sdio("https");
+    }
+    if (s_https_mux) {
+        xSemaphoreGive(s_https_mux);
+    }
+}
+
+bool display_https_busy(void)
+{
+    return s_https_busy > 0;
+}
+
+bool display_apply_recover_request(void)
+{
+    if (!s_recover_req) {
+        return false;
+    }
+    s_recover_req = false;
+    bool do_i2c = s_recover_i2c;
+    s_recover_i2c = false;
+
+    /* Reset I2C only when the indoor sensor actually lost the bus. A reset
+     * after every NWS/forecast HTTPS poll was knocking GT911 and MIPI over. */
+    if (do_i2c && s_i2c) {
+        esp_err_t ierr = i2c_master_bus_reset(s_i2c);
+        if (ierr != ESP_OK) {
+            ESP_LOGW(TAG, "i2c bus reset after %s: %s",
+                     s_recover_reason ? s_recover_reason : "sdio",
+                     esp_err_to_name(ierr));
+        } else {
+            ESP_LOGI(TAG, "i2c bus reset after %s",
+                     s_recover_reason ? s_recover_reason : "sdio");
+        }
+    }
+
+    if (s_panel) {
+        /* Off/on re-asserts the EK79007 stream if DPI dropped mid-SDIO. */
+        (void)esp_lcd_panel_disp_on_off(s_panel, false);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        esp_err_t err = esp_lcd_panel_disp_on_off(s_panel, true);
+        if (err != ESP_OK && err != ESP_ERR_NOT_SUPPORTED) {
+            ESP_LOGW(TAG, "disp_on_off failed: %s", esp_err_to_name(err));
+        }
+    }
+
+    uint8_t b = s_brightness_pct < 75 ? 75 : s_brightness_pct;
+    display_set_brightness(b);
+
+    lv_obj_t *scr = lv_screen_active();
+    if (scr) {
+        lv_obj_invalidate(scr);
+    }
+    lv_obj_t *top = lv_layer_top();
+    if (top) {
+        lv_obj_invalidate(top);
+    }
+    if (s_disp) {
+        lv_refr_now(s_disp);
+    }
+
+    ESP_LOGI(TAG, "panel recover applied (%s, backlight %u%%)",
+             s_recover_reason ? s_recover_reason : "sdio", (unsigned)b);
+    return true;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -365,6 +488,8 @@ static esp_err_t init_lvgl(void)
 
     s_disp = lvgl_port_add_disp_dsi(&disp_cfg, &dsi_cfg);
     ESP_RETURN_ON_FALSE(s_disp, ESP_FAIL, TAG, "lvgl display");
+
+    s_https_mux = xSemaphoreCreateMutex();
 
     if (s_touch) {
         lvgl_port_touch_cfg_t touch_cfg = {

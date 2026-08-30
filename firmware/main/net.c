@@ -21,6 +21,7 @@ esp_err_t net_wifi_begin(void) { return ESP_ERR_NOT_SUPPORTED; }
 void net_schedule_wifi_begin(void) {}
 
 bool net_is_connected(void) { return false; }
+bool net_wait_connected(uint32_t timeout_ms) { (void)timeout_ms; return false; }
 int8_t net_get_rssi(void) { return 0; }
 bool net_time_is_valid(void) { return false; }
 int net_scan(net_ap_t *out, int max_aps) { (void)out; (void)max_aps; return -1; }
@@ -313,6 +314,20 @@ bool net_is_connected(void)
         return false;
     }
     return (xEventGroupGetBits(s_events) & WIFI_CONNECTED_BIT) != 0;
+}
+
+bool net_wait_connected(uint32_t timeout_ms)
+{
+    if (net_is_connected()) {
+        return true;
+    }
+    if (!s_events) {
+        return false;
+    }
+    EventBits_t bits = xEventGroupWaitBits(s_events, WIFI_CONNECTED_BIT,
+                                           pdFALSE, pdFALSE,
+                                           pdMS_TO_TICKS(timeout_ms));
+    return (bits & WIFI_CONNECTED_BIT) != 0;
 }
 
 bool net_time_is_valid(void)

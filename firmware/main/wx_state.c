@@ -540,8 +540,8 @@ const char *wx_heat_index_risk(float temp_c, float humidity_pct)
 const char *wx_wind_chill_risk(float temp_c, float wind_ms)
 {
     float wc_f = wx_c_to_f(wx_feels_like_c(temp_c, 50.0f, wind_ms));
-    if (wc_f <= -18.0f) return "Extreme Danger";
-    if (wc_f <= -28.0f) return "Danger";
+    if (wc_f <= -28.0f) return "Extreme Danger";
+    if (wc_f <= -18.0f) return "Danger";
     if (wc_f <= -10.0f) return "Caution";
     return "Cold";
 }
@@ -568,6 +568,60 @@ const char *wx_compass_point(int degrees)
     return pts[(int)((d / 22.5f) + 0.5f) % 16];
 }
 
+int wx_beaufort_force(float wind_ms)
+{
+    /* Mean wind thresholds, WMO scale, in m/s. */
+    static const float lim[] = {
+        0.3f, 1.6f, 3.4f, 5.5f, 8.0f, 10.8f, 13.9f, 17.2f, 20.8f, 24.5f, 28.5f, 32.7f
+    };
+    if (wind_ms < 0.0f) {
+        wind_ms = 0.0f;
+    }
+    for (int i = 0; i < 12; i++) {
+        if (wind_ms < lim[i]) {
+            return i;
+        }
+    }
+    return 12;
+}
+
+const char *wx_beaufort_name(int force)
+{
+    static const char *names[] = {
+        "Calm", "Light air", "Light breeze", "Gentle breeze",
+        "Moderate breeze", "Fresh breeze", "Strong breeze", "Near gale",
+        "Gale", "Strong gale", "Storm", "Violent storm", "Hurricane",
+    };
+    if (force < 0) {
+        force = 0;
+    }
+    if (force > 12) {
+        force = 12;
+    }
+    return names[force];
+}
+
+int wx_next_precip_slot(const wx_state_t *s, int min_pop)
+{
+    if (!s || !s->hourly_valid || s->hourly_count <= 0) {
+        return -1;
+    }
+    int64_t now = (int64_t)time(NULL);
+    int n = s->hourly_count;
+    if (n > WX_HOURLY_SLOTS) {
+        n = WX_HOURLY_SLOTS;
+    }
+    for (int i = 0; i < n; i++) {
+        if (s->hourly[i].hour_epoch + 3600 < now) {
+            continue;
+        }
+        if (s->hourly[i].precip_probability >= min_pop) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 void wx_update_aqi(int aqi_val, const char *cat, float pm25)
 {
     LOCK();
@@ -575,7 +629,17 @@ void wx_update_aqi(int aqi_val, const char *cat, float pm25)
     s_state.aqi_pm25 = pm25;
     if (cat) {
         strncpy(s_state.aqi_category, cat, sizeof(s_state.aqi_category) - 1);
+        s_state.aqi_category[sizeof(s_state.aqi_category) - 1] = '\0';
     }
     s_state.aqi_valid = (aqi_val > 0);
+    UNLOCK();
+}
+
+void wx_update_station_location(float lat, float lon)
+{
+    LOCK();
+    s_state.station_lat = lat;
+    s_state.station_lon = lon;
+    s_state.station_loc_valid = !(lat == 0.0f && lon == 0.0f);
     UNLOCK();
 }

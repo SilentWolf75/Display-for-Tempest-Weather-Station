@@ -2,10 +2,12 @@
 
 Station: **230728** (https://tempestwx.com/station/230728/)
 
-This project uses two of the three available interfaces:
+This project uses two of WeatherFlow's three interfaces, plus two free public APIs:
 
 - **Local UDP** — primary source for everything live. No internet, no token, no limits.
-- **REST** — forecast only, plus derived values the UDP feed does not carry.
+- **REST** — Tempest forecast only, plus derived values the UDP feed does not carry.
+- **NWS** (`api.weather.gov`) — official alerts and forecast text. No API key.
+- **Open-Meteo air quality** — outdoor US AQI + PM2.5 for the zip. No API key.
 
 The WebSocket API is documented here as the designated fallback if UDP broadcast through
 ESP-Hosted proves unreliable (see `docs/hardware.md`).
@@ -121,6 +123,38 @@ After connect, send `{"type":"listen_start","device_id":<id>,"id":"<random>"}` a
 rapid wind. Same payload shapes as UDP.
 
 Adopt this only if Milestone 2 shows UDP broadcast does not survive the SDIO link.
+
+---
+
+## 4. National Weather Service (alerts + official forecast)
+
+Base: `https://api.weather.gov/`
+Auth: none. Identify the client with a `User-Agent` and `Accept: application/geo+json`.
+
+Zip → lat/lon is resolved once (zippopotam.us), then:
+
+| Endpoint | Use |
+|---|---|
+| `/alerts/active?point={lat},{lon}` | Highest-priority active watch/warning for the ticker and ALERTS page |
+| `/points/{lat},{lon}` | Forecast office, grid X/Y, city, nearest NEXRAD id (`radarStation`) |
+| `/gridpoints/{wfo}/{x},{y}/forecast` | Current period `shortForecast` + `detailedForecast` |
+
+Polled every 5 minutes in the same HTTPS window as alerts so the MIPI panel
+freezes once, not twice. Grid metadata is cached until the zip changes.
+
+`/radar` is **station status only**. This API does not serve radar display tiles.
+A RADAR page would need RainViewer or a NEXRAD WMS host plus a PNG decoder.
+The nearest site id is stored on the forecast struct for that later.
+
+---
+
+## 5. Outdoor AQI (Open-Meteo)
+
+`http://air-quality-api.open-meteo.com/v1/air-quality?latitude=…&longitude=…&current=us_aqi,pm2_5`
+
+This is **outdoor** regional air quality for the zip, not the Grove indoor
+sensor. Polled every 30 minutes. EPA category labels (`Good` … `Hazardous`)
+are applied on-device from the numeric `us_aqi`.
 
 ---
 

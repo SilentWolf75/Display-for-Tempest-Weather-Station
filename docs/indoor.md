@@ -42,6 +42,13 @@ weather station. Past `CONFIG_INDOOR_STALE_S` (default 30 min) the indoor group
 dims to 40% and the label says how old the reading is, so an unplugged sensor
 looks obviously wrong rather than quietly frozen at its last value.
 
+## What it is not
+
+The indoor probe is **temperature and humidity only**. The AQI badge, SKY AQI
+chip, and web dashboard "Air Quality" value are **outdoor** US EPA AQI from
+Open-Meteo (`us_aqi` + PM2.5) for the alert zip's lat/lon. The Tempest does not
+report AQI either.
+
 ## What was removed
 
 A Nest / Smart Device Management integration was built first and then deleted.

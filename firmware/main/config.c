@@ -1,5 +1,6 @@
 #include "config.h"
 
+#include <ctype.h>
 #include <stddef.h>
 #include <string.h>
 #include <time.h>
@@ -17,7 +18,7 @@ static const char *TAG = "config";
 
 /* Bump when the struct layout changes so a stale blob is discarded rather than
  * reinterpreted as garbage settings. */
-#define CFG_VERSION    7
+#define CFG_VERSION    9
 
 static cfg_t             s_cfg;
 static SemaphoreHandle_t s_lock;
@@ -28,13 +29,13 @@ static const cfg_t DEFAULTS = {
     .units             = CFG_UNITS_IMPERIAL,
     .timezone_idx      = 1,
     .brightness_day    = 100,
-    .brightness_night  = 25,
+    .brightness_night  = 70,
     .night_start_hour  = 22,
     .night_end_hour    = 7,
     .night_dim_enabled   = true,
-    .animate_forecast    = false,
+    .animate_forecast    = true,
     .wind_scale_max_ms   = 20,
-    .alert_zipcode       = "63011",
+    .alert_zipcode       = "66030",
     .alert_volume        = 80,
     .notification_volume = 70,
     .alert_siren_enabled = true,
@@ -51,6 +52,7 @@ static const cfg_t DEFAULTS = {
     .lightning_alert_sound     = true,
     .lightning_alert_voice     = false,
     .indoor_temp_offset_c      = 0.0f,   /* user trim; board heat is automatic */
+    .start_page                = 0,
 };
 
 typedef struct {
@@ -75,14 +77,16 @@ static void clamp(cfg_t *c)
         c->wifi_ssid[0] = '\0';
         c->wifi_password[0] = '\0';
     }
+    if (c->start_page > 4)             c->start_page = 0;
     if (c->units > CFG_UNITS_METRIC)   c->units = CFG_UNITS_IMPERIAL;
     if (c->timezone_idx > 7)           c->timezone_idx = 1;
-    if (c->brightness_day < 75)        c->brightness_day = 85;
+    if (c->brightness_day < 5)         c->brightness_day = 5;
     if (c->brightness_day > 100)       c->brightness_day = 100;
-    if (c->brightness_night < 75)      c->brightness_night = 75;
+    if (c->brightness_night < 50)      c->brightness_night = 50;
     if (c->brightness_night > 100)     c->brightness_night = 100;
-    c->screensaver_idle_min = 0;
-    c->screensaver_brightness = 75;
+    if (c->screensaver_idle_min > 60)  c->screensaver_idle_min = 60;
+    if (c->screensaver_brightness < 5) c->screensaver_brightness = 5;
+    if (c->screensaver_brightness > 50) c->screensaver_brightness = 50;
     if (c->indoor_temp_offset_c < -10.0f || c->indoor_temp_offset_c > 10.0f) {
         c->indoor_temp_offset_c = 0.0f;
     }
@@ -91,6 +95,17 @@ static void clamp(cfg_t *c)
     if (c->indoor_temp_offset_c < -6.0f && c->indoor_temp_offset_c > -4.5f) {
         c->indoor_temp_offset_c = 0.0f;
     }
+
+    char zip[sizeof(c->alert_zipcode)];
+    size_t z = 0;
+    for (size_t i = 0; c->alert_zipcode[i] != '\0' && z < 5; i++) {
+        if (isdigit((unsigned char)c->alert_zipcode[i])) {
+            zip[z++] = c->alert_zipcode[i];
+        }
+    }
+    zip[z] = '\0';
+    strncpy(c->alert_zipcode, zip, sizeof(c->alert_zipcode) - 1);
+    c->alert_zipcode[sizeof(c->alert_zipcode) - 1] = '\0';
 }
 
 static esp_err_t persist(const cfg_t *c)
@@ -139,6 +154,26 @@ esp_err_t cfg_init(void)
 
     if (len < sizeof(uint8_t) + offsetof(cfg_t, wifi_ssid)) {
         ESP_LOGW(TAG, "settings blob too small (%u bytes)", (unsigned)len);
+        return ESP_OK;
+    }
+
+    if (blob.version == 7) {
+        /* Keep every setting; turn on forecast animation that v7 defaulted off. */
+        s_cfg = blob.cfg;
+        clamp(&s_cfg);
+        s_cfg.animate_forecast = true;
+        s_cfg.start_page = 0;
+        persist(&s_cfg);
+        ESP_LOGI(TAG, "settings v7→v9: forecast animation enabled");
+        return ESP_OK;
+    }
+
+    if (blob.version == 8) {
+        s_cfg = blob.cfg;
+        s_cfg.start_page = 0;
+        clamp(&s_cfg);
+        persist(&s_cfg);
+        ESP_LOGI(TAG, "settings v8→v9: start page LIVE");
         return ESP_OK;
     }
 

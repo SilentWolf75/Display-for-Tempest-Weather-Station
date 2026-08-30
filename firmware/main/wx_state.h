@@ -168,6 +168,11 @@ typedef struct {
     char     aqi_category[24];
     float    aqi_pm25;
     bool     aqi_valid;
+
+    /* Geocoded from the settings zip. Used for moon altitude and NWS/AQI. */
+    float    station_lat;
+    float    station_lon;
+    bool     station_loc_valid;
 } wx_state_t;
 
 /* Call once, before any producer or consumer task starts. */
@@ -190,6 +195,7 @@ void wx_update_rain_totals(float mm_7d, float mm_month, float mm_ytd);
 void wx_update_moon_schedule(int64_t rise, int64_t set);
 void wx_update_indoor(const wx_state_t *partial);
 void wx_update_aqi(int aqi_val, const char *cat, float pm25);
+void wx_update_station_location(float lat, float lon);
 void wx_set_wifi_connected(bool connected);
 void wx_note_udp_packet(void);
 
@@ -222,6 +228,13 @@ const char *wx_wind_chill_risk(float temp_c, float wind_ms);
 
 /* "rising rapidly", "steady", ... for the pressure card. */
 const char *wx_trend_description(wx_trend_t trend);
+
+/* Beaufort 0..12 from mean wind speed in m/s. */
+int         wx_beaufort_force(float wind_ms);
+const char *wx_beaufort_name(int force);
+
+/* First hourly slot at/after now with precip_probability >= min_pop, or -1. */
+int wx_next_precip_slot(const wx_state_t *s, int min_pop);
 
 /* Unit conversion — presentation layer only. */
 static inline float wx_c_to_f(float c)       { return c * 9.0f / 5.0f + 32.0f; }

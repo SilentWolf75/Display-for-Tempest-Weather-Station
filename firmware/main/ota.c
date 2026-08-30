@@ -74,7 +74,8 @@ static esp_err_t root_get(httpd_req_t *req)
         "<dt>running<dd>%s"
         "<dt>free heap<dd>%u KB internal, %u KB PSRAM"
         "</dl>"
-        "<form method=post action=/ota/update enctype=multipart/form-data>"
+        "<form method=post action=/ota/update enctype=multipart/form-data "
+        "onsubmit=\"if(this.p)this.action='/ota/update?p='+encodeURIComponent(this.p.value)\">"
         "<label>Firmware image (.bin)</label><br>"
         "<input type=file name=f accept=.bin required><br>"
         "%s"
@@ -104,24 +105,31 @@ static esp_err_t root_get(httpd_req_t *req)
  * binary with curl --data-binary, which is what docs/bringup.md documents.
  * -------------------------------------------------------------------------- */
 
-static bool password_ok(httpd_req_t *req)
+bool ota_password_ok(httpd_req_t *req)
 {
     if (CONFIG_OTA_PASSWORD[0] == '\0') {
         return true;
     }
     char buf[64] = {0};
     if (httpd_req_get_hdr_value_str(req, "X-OTA-Password", buf,
-                                    sizeof(buf)) != ESP_OK) {
-        return false;
+                                    sizeof(buf)) == ESP_OK &&
+        strncmp(buf, CONFIG_OTA_PASSWORD, sizeof(buf)) == 0) {
+        return true;
     }
-    /* Length-checked compare; not constant time, but the attacker is already
-     * on the LAN and the alternative is no password at all. */
-    return strncmp(buf, CONFIG_OTA_PASSWORD, sizeof(buf)) == 0;
+
+    /* Browser form cannot set a custom header. The page copies the password
+     * into ?p= on submit so curl --header still works and so does the form. */
+    char query[96] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "p", buf, sizeof(buf)) == ESP_OK) {
+        return strncmp(buf, CONFIG_OTA_PASSWORD, sizeof(buf)) == 0;
+    }
+    return false;
 }
 
 static esp_err_t update_post(httpd_req_t *req)
 {
-    if (!password_ok(req)) {
+    if (!ota_password_ok(req)) {
         ESP_LOGW(TAG, "upload rejected: bad or missing X-OTA-Password");
         httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "bad password");
         return ESP_FAIL;
@@ -238,6 +246,7 @@ static esp_err_t update_post(httpd_req_t *req)
 }
 
 static bool s_registered;
+static bool s_owns_server;
 
 esp_err_t ota_register(httpd_handle_t server)
 {
@@ -272,9 +281,30 @@ esp_err_t ota_register(httpd_handle_t server)
     return ESP_OK;
 }
 
+void ota_detach(void)
+{
+    if (!s_owns_server) {
+        s_server = NULL;
+        s_registered = false;
+    }
+}
+
+void ota_stop(void)
+{
+    if (s_owns_server && s_server) {
+        httpd_stop(s_server);
+    }
+    s_server = NULL;
+    s_registered = false;
+    s_owns_server = false;
+}
+
 esp_err_t ota_start(void)
 {
-    if (s_server) {
+    if (s_owns_server && s_server) {
+        return ESP_OK;
+    }
+    if (s_server && !s_owns_server) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -287,16 +317,19 @@ esp_err_t ota_start(void)
     esp_err_t err = httpd_start(&s_server, &cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
+        s_server = NULL;
         return err;
     }
+    s_owns_server = true;
 
     err = ota_register(s_server);
     if (err != ESP_OK) {
         httpd_stop(s_server);
         s_server = NULL;
+        s_owns_server = false;
         return err;
     }
 
-    ESP_LOGI(TAG, "standalone OTA server on port 80 (legacy)");
+    ESP_LOGI(TAG, "standalone OTA server on port 80");
     return ESP_OK;
 }

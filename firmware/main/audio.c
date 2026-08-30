@@ -403,46 +403,35 @@ static void play_voice_announcement(const char *text, audio_vol_class_t vol)
         return;
     }
 
-    /* Direct WAV file name playback */
     if (strstr(text, ".wav") != NULL) {
-        if (play_spiffs_wav_vol(text, vol)) {
-            return;
-        }
-    }
-
-    if (strstr(text, "chime") != NULL || strstr(text, "Chime") != NULL) {
-        if (play_spiffs_wav_vol("chime.wav", AUDIO_VOL_NOTIFICATION)) {
-            return;
-        }
-    }
-    if (strstr(text, "test") != NULL || strstr(text, "Test") != NULL) {
-        if (play_spiffs_wav_vol("test.wav", vol)) {
-            return;
-        }
-    }
-    if (strstr(text, "Tornado") != NULL || strstr(text, "tornado") != NULL) {
-        if (play_spiffs_wav_vol("tornado.wav", AUDIO_VOL_ALERT)) {
-            return;
-        }
-    }
-    if (strstr(text, "Thunderstorm") != NULL || strstr(text, "thunderstorm") != NULL) {
-        if (play_spiffs_wav_vol("thunderstorm.wav", AUDIO_VOL_ALERT)) {
-            return;
-        }
-    }
-    if (strstr(text, "Flood") != NULL || strstr(text, "flood") != NULL) {
-        if (play_spiffs_wav_vol("flood.wav", AUDIO_VOL_ALERT)) {
-            return;
-        }
-    }
-    if (strstr(text, "morning_") != NULL) {
-        if (play_spiffs_wav_vol(text, AUDIO_VOL_NOTIFICATION)) {
-            return;
-        }
-    }
-    if (play_spiffs_wav_vol("general.wav", AUDIO_VOL_ALERT)) {
+        play_spiffs_wav_vol(text, vol);
         return;
     }
+    if (strstr(text, "chime") != NULL || strstr(text, "Chime") != NULL) {
+        play_spiffs_wav_vol("chime.wav", AUDIO_VOL_NOTIFICATION);
+        return;
+    }
+    if (strstr(text, "morning_") != NULL) {
+        play_spiffs_wav_vol(text, AUDIO_VOL_NOTIFICATION);
+        return;
+    }
+    if (strstr(text, "test") != NULL || strstr(text, "Test") != NULL) {
+        play_spiffs_wav_vol("test.wav", vol);
+        return;
+    }
+    if (strstr(text, "Tornado") != NULL || strstr(text, "tornado") != NULL) {
+        play_spiffs_wav_vol("tornado.wav", AUDIO_VOL_ALERT);
+        return;
+    }
+    if (strstr(text, "Thunderstorm") != NULL || strstr(text, "thunderstorm") != NULL) {
+        play_spiffs_wav_vol("thunderstorm.wav", AUDIO_VOL_ALERT);
+        return;
+    }
+    if (strstr(text, "Flood") != NULL || strstr(text, "flood") != NULL) {
+        play_spiffs_wav_vol("flood.wav", AUDIO_VOL_ALERT);
+        return;
+    }
+    play_spiffs_wav_vol("general.wav", AUDIO_VOL_ALERT);
 }
 
 typedef struct {

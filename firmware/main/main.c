@@ -20,6 +20,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 
 #include "wx_state.h"
@@ -51,6 +52,9 @@ static const char *TAG = "main";
 
 static EventGroupHandle_t s_boot_events;
 static bool               s_display_up;
+static lv_timer_t        *s_ui_timer;
+
+static void ui_timer_cb(lv_timer_t *timer);
 
 static void signal_ui_ready(void)
 {
@@ -73,7 +77,8 @@ static void pump_ui_frames(int passes)
 }
 
 /* SDIO (SD card mount + ESP-Hosted C6 reset) clobbers the MIPI pipeline after
- * ui_init() paints. Repaint before the backlight goes on. */
+ * ui_init() paints. Repaint before the backlight goes on. Do not start the
+ * 1 Hz tick or the radio yet — Wi-Fi over SDIO is what blanks the glass. */
 static void restore_panel_after_sdio(void)
 {
     if (!s_display_up) {
@@ -81,18 +86,47 @@ static void restore_panel_after_sdio(void)
     }
 
     if (display_lock(10000)) {
-        pump_ui_frames(50);
+        lv_obj_t *scr = ui_main_screen();
+        if (scr) {
+            lv_obj_invalidate(scr);
+        }
+        pump_ui_frames(16);
         display_unlock();
         ESP_LOGI(TAG, "post-SDIO frame flushed");
     } else {
         ESP_LOGE(TAG, "post-SDIO refresh skipped: could not lock LVGL");
     }
 
-    cfg_t c;
-    cfg_get(&c);
-    uint8_t b = c.brightness_day >= 75 ? c.brightness_day : 85;
-    display_set_brightness(b);
-    ESP_LOGI(TAG, "backlight on after post-SDIO refresh (%u%%)", b);
+    display_set_brightness(100);
+    ESP_LOGI(TAG, "backlight on after post-SDIO refresh (100%%)");
+}
+
+/* After the C6 finishes associating, wake MIPI and start the 1 Hz tick. */
+static void start_ui_after_wifi(void)
+{
+    if (!s_display_up) {
+        return;
+    }
+
+    display_recover_after_sdio("wifi");
+    if (display_lock(10000)) {
+        lv_obj_t *scr = ui_main_screen();
+        if (scr) {
+            lv_obj_invalidate(scr);
+        }
+        display_apply_recover_request();
+        pump_ui_frames(16);
+        ui_mark_panel_visible();
+        if (!s_ui_timer) {
+            s_ui_timer = lv_timer_create(ui_timer_cb, UI_TICK_PERIOD_MS, NULL);
+        }
+        display_unlock();
+        ESP_LOGI(TAG, "ui tick started after wifi settle");
+    } else {
+        ESP_LOGE(TAG, "post-wifi refresh skipped: could not lock LVGL");
+    }
+
+    display_set_brightness(100);
 }
 
 static void ui_timer_cb(lv_timer_t *timer)
@@ -122,18 +156,16 @@ static void ui_init_task(void *pvParameters)
     if (display_lock(10000)) {
         ESP_LOGI(TAG, "Display locked; building UI widgets...");
         ui_init();
-        lv_timer_create(ui_timer_cb, UI_TICK_PERIOD_MS, NULL);
 
-        /* Flush the full dashboard to the MIPI panel before any SDIO traffic
-         * (SD card mount, ESP-Hosted C6) runs. Unlock-then-invalidate left the
-         * backlight on with nothing on glass. */
+        /* Flush widgets once, then leave LVGL idle until SDIO is done.
+         * Do not start ui_tick yet. */
         lv_obj_t *scr = ui_main_screen();
         if (scr) {
             lv_obj_invalidate(scr);
         }
         pump_ui_frames(30);
         display_unlock();
-        ESP_LOGI(TAG, "UI initialized (backlight deferred until post-SDIO)");
+        ESP_LOGI(TAG, "UI initialized (tick and backlight wait for post-SDIO)");
     } else {
         ESP_LOGE(TAG, "CRITICAL: Failed to lock display for UI initialization!");
     }
@@ -155,6 +187,11 @@ void app_main(void)
 
     ESP_ERROR_CHECK(wx_state_init());
     ESP_ERROR_CHECK(cfg_init());   /* before the UI reads units */
+    {
+        cfg_t tzcfg;
+        cfg_get(&tzcfg);
+        net_set_timezone(tzcfg.timezone_idx);
+    }
     ESP_ERROR_CHECK(history_init());  /* before the first obs_st */
 
 #if CONFIG_DIAG_ON_BOOT
@@ -200,17 +237,29 @@ void app_main(void)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "network stack init failed (%s); continuing headless",
                  esp_err_to_name(err));
-    } else {
-        net_schedule_wifi_begin();
     }
 #else
     ESP_LOGW(TAG, "display-only build: no Wi-Fi, no station data, no OTA");
 #endif
 
-    /* net_init() blocks until the ESP-Hosted coprocessor is up; a short settle
-     * is enough before the first visible frame. */
-    vTaskDelay(pdMS_TO_TICKS(300));
+    /* net_init() brings the C6 up over SDIO. Let MIPI settle, paint the
+     * dashboard, THEN start the radio — wifi_begin during the first flush
+     * is what left a backlight-on blank screen. */
+    vTaskDelay(pdMS_TO_TICKS(800));
     restore_panel_after_sdio();
+
+#if CONFIG_TEMPEST_NETWORK_ENABLED
+    if (err == ESP_OK) {
+        net_schedule_wifi_begin();
+        if (net_wait_connected(20000)) {
+            ESP_LOGI(TAG, "wifi up; settling before ui tick");
+        } else {
+            ESP_LOGW(TAG, "wifi not up in 20 s; starting ui tick anyway");
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+#endif
+    start_ui_after_wifi();
 
 #if CONFIG_TEMPEST_NETWORK_ENABLED
 #if CONFIG_DIAG_ON_BOOT
@@ -240,7 +289,7 @@ void app_main(void)
     /* Start NOAA NWS Weather Alerts Monitor */
     nws_alerts_start();
 
-    /* Start EPA AirNow Air Quality Index Monitor */
+    /* Outdoor US AQI from Open-Meteo (zip lat/lon). Not indoor. */
     aqi_poll_start();
 
     /* Start Local Web Dashboard & mDNS (http://tempest.local) */
@@ -274,12 +323,17 @@ void app_main(void)
         if (cfg_boot.web_server_enabled && net_is_connected() && !web_server_is_running()) {
             web_server_start();
         }
-        ESP_LOGI(TAG, "udp packets: %lu (+%lu)  wifi: %s  heap: %u/%u",
+        uint8_t bright = display_get_brightness();
+        ESP_LOGI(TAG, "udp packets: %lu (+%lu)  wifi: %s  heap: %u/%u  "
+                 "uptime: %lus  backlight: %u%%  lvgl_tick: %u",
                  (unsigned long)count,
                  (unsigned long)(count - last_count),
                  net_is_connected() ? "up" : "down",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned long)(esp_timer_get_time() / 1000000LL),
+                 (unsigned)bright,
+                 (unsigned)lv_tick_get());
 
         /* Weather history to the card. Rate-limits itself to one row a
          * minute, so calling it on the 30 s health tick is fine. The old code

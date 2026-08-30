@@ -54,10 +54,12 @@ MAPPING = {
     "possibly-thunderstorm-day": "thunderstorms-day",
     "possibly-thunderstorm-night": "thunderstorms-night",
     "rainy":                     "rain",
+    "rain":                      "rain",
     "sleet":                     "sleet",
     "snow":                      "snow",
     "thunderstorm":              "thunderstorms",
-    "windy":                     "wind",
+    "wind":                      "wind",   # WeatherFlow's documented slug
+    "windy":                     "wind",   # alias; early builds shipped this name
     "moon-full":                 "moon-full",
     "moon-waxing-gibbous":       "moon-waxing-gibbous",
     "moon-first-quarter":        "moon-first-quarter",

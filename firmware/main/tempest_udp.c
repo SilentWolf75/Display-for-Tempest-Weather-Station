@@ -79,6 +79,7 @@ static void handle_obs_st(const cJSON *root)
     p.lightning_avg_dist_km   = (float)arr_num(o, OBS_STRIKE_DIST, 0);
     p.lightning_count         = (int)arr_num(o, OBS_STRIKE_COUNT, 0);
     p.battery_v               = (float)arr_num(o, OBS_BATTERY, 0);
+    p.report_interval_min     = (int)arr_num(o, OBS_REPORT_INTERVAL, 1);
     wx_update_obs_st(&p);
 
     if (p.obs_epoch > 1700000000LL) {

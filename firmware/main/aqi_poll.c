@@ -3,9 +3,11 @@
 #include "wx_state.h"
 #include "config.h"
 #include "net.h"
+#include "display.h"
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -19,10 +21,16 @@ static const char *TAG = "aqi";
 #define AQI_POLL_INTERVAL_S  (30 * 60)  /* 30 minutes */
 #define HTTP_BUF_SIZE        (4 * 1024)
 
+static char  s_geo_zip[10];
+static float s_geo_lat;
+static float s_geo_lon;
+static bool  s_geo_ok;
+
 typedef struct {
     char *buf;
     int   len;
     int   cap;
+    bool  overflow;
 } http_accum_t;
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
@@ -33,6 +41,8 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             memcpy(acc->buf + acc->len, evt->data, evt->data_len);
             acc->len += evt->data_len;
             acc->buf[acc->len] = '\0';
+        } else {
+            acc->overflow = true;
         }
     }
     return ESP_OK;
@@ -48,21 +58,30 @@ static const char *aqi_category_for_val(int val)
     return "Hazardous";
 }
 
-static void poll_aqi(void)
+static bool resolve_coords(const char *zip, float *lat, float *lon)
 {
-    cfg_t cfg;
-    cfg_get(&cfg);
+    wx_state_t s;
+    wx_snapshot(&s);
+    if (s.station_loc_valid) {
+        *lat = s.station_lat;
+        *lon = s.station_lon;
+        return true;
+    }
 
-    if (cfg.alert_zipcode[0] == '\0') return;
+    if (s_geo_ok && zip && strcmp(s_geo_zip, zip) == 0) {
+        *lat = s_geo_lat;
+        *lon = s_geo_lon;
+        return true;
+    }
 
-    /* 1. Geocode Zip to Lat/Lon */
     char zip_url[128];
-    snprintf(zip_url, sizeof(zip_url), "http://api.zippopotam.us/us/%s", cfg.alert_zipcode);
+    snprintf(zip_url, sizeof(zip_url), "http://api.zippopotam.us/us/%s", zip);
 
     char *resp_buf = heap_caps_malloc(HTTP_BUF_SIZE, MALLOC_CAP_SPIRAM);
-    if (!resp_buf) return;
+    if (!resp_buf) {
+        return false;
+    }
     resp_buf[0] = '\0';
-
     http_accum_t acc = { .buf = resp_buf, .len = 0, .cap = HTTP_BUF_SIZE };
 
     esp_http_client_config_t http_cfg = {
@@ -75,48 +94,77 @@ static void poll_aqi(void)
     esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
     if (!client) {
         free(resp_buf);
-        return;
+        return false;
     }
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
 
-    if (err != ESP_OK || status != 200 || acc.len == 0) {
+    if (err != ESP_OK || status != 200 || acc.len == 0 || acc.overflow) {
         free(resp_buf);
-        return;
+        return false;
     }
 
     cJSON *root = cJSON_Parse(resp_buf);
     free(resp_buf);
-    if (!root) return;
+    if (!root) {
+        return false;
+    }
 
     cJSON *places = cJSON_GetObjectItemCaseSensitive(root, "places");
     if (!cJSON_IsArray(places) || cJSON_GetArraySize(places) == 0) {
         cJSON_Delete(root);
-        return;
+        return false;
     }
 
     cJSON *p0 = cJSON_GetArrayItem(places, 0);
     cJSON *lat_obj = cJSON_GetObjectItemCaseSensitive(p0, "latitude");
     cJSON *lon_obj = cJSON_GetObjectItemCaseSensitive(p0, "longitude");
-
-    float lat = (lat_obj && lat_obj->valuestring) ? (float)atof(lat_obj->valuestring) : 0.0f;
-    float lon = (lon_obj && lon_obj->valuestring) ? (float)atof(lon_obj->valuestring) : 0.0f;
+    *lat = (lat_obj && lat_obj->valuestring) ? (float)atof(lat_obj->valuestring) : 0.0f;
+    *lon = (lon_obj && lon_obj->valuestring) ? (float)atof(lon_obj->valuestring) : 0.0f;
     cJSON_Delete(root);
 
-    if (lat == 0.0f && lon == 0.0f) return;
+    if (*lat == 0.0f && *lon == 0.0f) {
+        return false;
+    }
+    strncpy(s_geo_zip, zip ? zip : "", sizeof(s_geo_zip) - 1);
+    s_geo_zip[sizeof(s_geo_zip) - 1] = '\0';
+    s_geo_lat = *lat;
+    s_geo_lon = *lon;
+    s_geo_ok = true;
+    wx_update_station_location(*lat, *lon);
+    return true;
+}
 
-    /* 2. Query Open-Meteo Air Quality API */
+static void poll_aqi(void)
+{
+    cfg_t cfg;
+    cfg_get(&cfg);
+
+    if (cfg.alert_zipcode[0] == '\0') {
+        return;
+    }
+
+    display_https_begin();
+
+    float lat = 0.0f, lon = 0.0f;
+    if (!resolve_coords(cfg.alert_zipcode, &lat, &lon)) {
+        display_https_end();
+        return;
+    }
+
     char aqi_url[256];
     snprintf(aqi_url, sizeof(aqi_url),
              "http://air-quality-api.open-meteo.com/v1/air-quality?latitude=%.4f&longitude=%.4f&current=us_aqi,pm2_5",
              lat, lon);
 
-    resp_buf = malloc(HTTP_BUF_SIZE);
-    if (!resp_buf) return;
+    char *resp_buf = heap_caps_malloc(HTTP_BUF_SIZE, MALLOC_CAP_SPIRAM);
+    if (!resp_buf) {
+        display_https_end();
+        return;
+    }
     resp_buf[0] = '\0';
-    acc.buf = resp_buf;
-    acc.len = 0;
+    http_accum_t acc = { .buf = resp_buf, .len = 0, .cap = HTTP_BUF_SIZE };
 
     esp_http_client_config_t aqi_http_cfg = {
         .url = aqi_url,
@@ -126,21 +174,30 @@ static void poll_aqi(void)
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
 
-    client = esp_http_client_init(&aqi_http_cfg);
+    esp_http_client_handle_t client = esp_http_client_init(&aqi_http_cfg);
+    if (!client) {
+        free(resp_buf);
+        display_https_end();
+        return;
+    }
     esp_http_client_set_header(client, "User-Agent", "tempest-display/1.0");
 
-    err = esp_http_client_perform(client);
-    status = esp_http_client_get_status_code(client);
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
 
-    if (err != ESP_OK || status != 200 || acc.len == 0) {
+    if (err != ESP_OK || status != 200 || acc.len == 0 || acc.overflow) {
         free(resp_buf);
+        display_https_end();
         return;
     }
 
-    root = cJSON_Parse(resp_buf);
+    cJSON *root = cJSON_Parse(resp_buf);
     free(resp_buf);
-    if (!root) return;
+    if (!root) {
+        display_https_end();
+        return;
+    }
 
     cJSON *curr = cJSON_GetObjectItemCaseSensitive(root, "current");
     if (curr) {
@@ -157,6 +214,7 @@ static void poll_aqi(void)
         }
     }
     cJSON_Delete(root);
+    display_https_end();
 }
 
 static void aqi_task(void *arg)
@@ -171,6 +229,8 @@ static void aqi_task(void *arg)
     while (1) {
         if (net_is_connected()) {
             poll_aqi();
+            vTaskDelay(pdMS_TO_TICKS(200));
+            display_recover_after_sdio("aqi");
         }
         vTaskDelay(pdMS_TO_TICKS(AQI_POLL_INTERVAL_S * 1000));
     }
@@ -178,7 +238,7 @@ static void aqi_task(void *arg)
 
 esp_err_t aqi_poll_start(void)
 {
-    xTaskCreate(aqi_task, "aqi_task", 6 * 1024, NULL, 3, NULL);
+    xTaskCreate(aqi_task, "aqi_task", 10 * 1024, NULL, 3, NULL);
     return ESP_OK;
 }
 

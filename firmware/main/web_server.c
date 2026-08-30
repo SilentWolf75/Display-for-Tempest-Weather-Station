@@ -8,10 +8,12 @@
 #include "history.h"
 #include "tempest_ws.h"
 #include "sdcard.h"
+#include "sdkconfig.h"
 
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <stdint.h>
 #include <time.h>
 #include <sys/stat.h>
 
@@ -85,6 +87,11 @@ static const char HTML_PAGE[] =
 ".fc-day .hi{font-size:18px;font-weight:700;}"
 ".fc-day .lo{font-size:13px;color:var(--dim);}"
 ".fc-day .pop{font-size:11px;color:var(--accent);margin-top:4px;}"
+".hourly{display:grid;grid-template-columns:repeat(12,1fr);gap:6px;margin:16px 0;}"
+".h-col{text-align:center;font-size:11px;color:var(--dim);}"
+".h-bar{height:52px;background:#0f172a;border-radius:6px;position:relative;overflow:hidden;margin:4px 0;}"
+".h-fill{position:absolute;bottom:0;left:0;right:0;background:var(--accent);opacity:0.85;}"
+".h-temp{font-size:12px;font-weight:600;color:var(--text);}"
 ".chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;}"
 ".chart-wrap{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;}"
 "canvas{width:100%;height:100px;display:block;}"
@@ -97,15 +104,19 @@ static const char HTML_PAGE[] =
 "<div class='grid'>"
 "<div class='card'><div class='label'>Temperature</div><div class='val' id='temp'>--°</div><div class='sub' id='feels'>Feels like --°</div></div>"
 "<div class='card'><div class='label'>Humidity / Dew</div><div class='val' id='humidity'>--%</div><div class='sub' id='dew'>Dew point --°</div></div>"
-"<div class='card'><div class='label'>Wind Speed</div><div class='val' id='wind'>-- mph</div><div class='sub' id='wind_dir'>Direction --</div></div>"
+"<div class='card'><div class='label'>Wind Speed</div><div class='val' id='wind'>-- mph</div><div class='sub' id='wind_dir'>Direction --</div><div class='sub' id='beaufort'>Beaufort --</div></div>"
 "<div class='card'><div class='label'>Barometer</div><div class='val' id='pressure'>-- inHg</div><div class='sub' id='trend'>Trend: Steady</div></div>"
-"<div class='card'><div class='label'>Rain Today</div><div class='val' id='rain'>-- in</div><div class='sub' id='rain_rate'>Rate: 0.00 in/hr</div></div>"
+"<div class='card'><div class='label'>Rain Today</div><div class='val' id='rain'>-- in</div><div class='sub' id='rain_rate'>Rate: 0.00 in/hr</div><div class='sub' id='rain_next'>Next rain --</div></div>"
+"<div class='card'><div class='label'>Lightning</div><div class='val' id='strikes'>--</div><div class='sub' id='strike_dist'>No strikes in 3 hrs</div></div>"
 "<div class='card'><div class='label'>Solar / UV</div><div class='val' id='solar'>-- W/m²</div><div class='sub' id='uv'>UV Index --</div></div>"
 "<div class='card'><div class='label'>Air Quality</div><div class='val' id='aqi'>--</div><div class='sub' id='aqi_cat'>EPA Index</div></div>"
 "<div class='card'><div class='label'>Station Health</div><div class='val' id='battery'>-- V</div><div class='sub' id='hub_rssi'>Hub RSSI: -- dBm</div></div>"
 "<div class='card'><div class='label'>Indoor</div><div class='val' id='indoor_temp'>--°</div><div class='sub' id='indoor_hum'>Humidity --%</div></div>"
+"<div class='card'><div class='label'>Conditions</div><div class='val' id='conditions' style='font-size:22px'>--</div><div class='sub' id='sun'>Rise -- &nbsp; Set --</div></div>"
 "</div>"
 "<div class='forecast' id='forecast_row'></div>"
+"<div class='label' style='margin:8px 0 4px'>Next 12 hours</div>"
+"<div class='hourly' id='hourly_row'></div>"
 "<div class='chart-grid'>"
 "<div class='chart-wrap'><div class='label' style='margin-bottom:8px'>24h Temperature</div>"
 "<canvas id='chart_temp' width='440' height='100'></canvas></div>"
@@ -127,19 +138,23 @@ static const char HTML_PAGE[] =
 "let r=await fetch('/api/status');"
 "if(!r.ok)throw new Error('status '+r.status);"
 "let d=await r.json();"
-"if(!d.obs_valid){document.getElementById('station_status').innerText='● Waiting for data';"
-"document.getElementById('station_status').style.color='var(--warn)';return;}"
 "let uT=d.u_temp||'°F',uW=' '+(d.u_wind||'mph'),uP=' '+(d.u_pres||'inHg'),uR=' '+(d.u_rain||'in');"
+"document.getElementById('conditions').innerText=d.conditions||'--';"
+"document.getElementById('sun').innerText='Rise '+(d.sunrise||'--')+'  ·  Set '+(d.sunset||'--');"
 "document.getElementById('temp').innerText=t(n(d.temp,1),uT);"
 "document.getElementById('feels').innerText='Feels like '+t(n(d.feels,1),uT);"
 "document.getElementById('humidity').innerText=t(n(d.humidity,0),'%');"
 "document.getElementById('dew').innerText='Dew point '+t(n(d.dew,1),uT);"
 "document.getElementById('wind').innerText=t(n(d.wind,1),uW);"
 "document.getElementById('wind_dir').innerText=(d.wind_dir||'--')+' ('+(d.wind_deg!=null?d.wind_deg:'--')+'°)';"
+"document.getElementById('beaufort').innerText=d.beaufort||'Beaufort --';"
 "document.getElementById('pressure').innerText=t(n(d.pressure,2),uP);"
 "document.getElementById('trend').innerText='Trend: '+(d.trend_str||'Steady');"
 "document.getElementById('rain').innerText=t(n(d.rain_today,2),uR);"
 "document.getElementById('rain_rate').innerText='Rate: '+t(n(d.rain_rate,2),uR+'/hr');"
+"document.getElementById('rain_next').innerText=d.next_rain||'No rain expected';"
+"document.getElementById('strikes').innerText=d.strikes_3h!=null?d.strikes_3h:'--';"
+"document.getElementById('strike_dist').innerText=d.last_strike||'No strikes in 3 hrs';"
 "document.getElementById('solar').innerText=t(n(d.solar_wm2,0),' W/m²');"
 "document.getElementById('uv').innerText='UV Index: '+t(n(d.uv,1),'');"
 "document.getElementById('aqi').innerText=d.aqi>0?d.aqi:'--';"
@@ -148,6 +163,7 @@ static const char HTML_PAGE[] =
 "document.getElementById('hub_rssi').innerText='Hub RSSI: '+(d.hub_rssi!=null?d.hub_rssi:'--')+' dBm';"
 "let st=document.getElementById('station_status');"
 "if(!d.wifi_connected){st.innerText='● No Wi-Fi';st.style.color='var(--alert)';}"
+"else if(!d.obs_valid){st.innerText='● Waiting for station';st.style.color='var(--warn)';}"
 "else if(d.ws_fallback){st.innerText='● WebSocket fallback';st.style.color='var(--warn)';}"
 "else if(d.udp_stale){st.innerText='● No UDP';st.style.color='var(--warn)';}"
 "else if(d.obs_stale){st.innerText='● Stale data';st.style.color='var(--warn)';}"
@@ -171,6 +187,15 @@ static const char HTML_PAGE[] =
 "el.appendChild(day);el.appendChild(hi);el.appendChild(lo);"
 "if(x.pop>0){let pop=document.createElement('div');pop.className='pop';pop.textContent=x.pop+'%';el.appendChild(pop);}"
 "fr.appendChild(el);});}"
+"let hr=document.getElementById('hourly_row');hr.replaceChildren();"
+"if(Array.isArray(d.hourly)){d.hourly.slice(0,12).forEach(function(x){"
+"let el=document.createElement('div');el.className='h-col';"
+"let bar=document.createElement('div');bar.className='h-bar';"
+"let fill=document.createElement('div');fill.className='h-fill';"
+"fill.style.height=Math.max(4,Math.min(100,x.pop||0))+'%';bar.appendChild(fill);"
+"let tmp=document.createElement('div');tmp.className='h-temp';tmp.textContent=t(n(x.temp,0),uT);"
+"let lab=document.createElement('div');lab.textContent=x.hour||'--';"
+"el.appendChild(lab);el.appendChild(bar);el.appendChild(tmp);hr.appendChild(el);});}"
 "}catch(e){console.error(e);document.getElementById('station_status').innerText='● API error';"
 "document.getElementById('station_status').style.color='var(--alert)';}}"
 "function drawChart(id,data,color){"
@@ -204,6 +229,22 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     return httpd_resp_send(req, HTML_PAGE, sizeof(HTML_PAGE) - 1);
 }
 
+static void web_add_hhmm(cJSON *root, const char *key, int64_t epoch)
+{
+    if (!root || !key || epoch <= 0) {
+        return;
+    }
+    time_t t = (time_t)epoch;
+    struct tm lt;
+    localtime_r(&t, &lt);
+    char buf[16];
+    strftime(buf, sizeof(buf), "%I:%M %p", &lt);
+    if (buf[0] == '0') {
+        memmove(buf, buf + 1, strlen(buf));
+    }
+    cJSON_AddStringToObject(root, key, buf);
+}
+
 static void web_add_units(cJSON *root)
 {
     char buf[16];
@@ -228,48 +269,103 @@ static esp_err_t api_status_handler(httpd_req_t *req)
 
     cJSON_AddBoolToObject(root, "obs_valid", s.obs_valid);
     web_add_units(root);
-    if (!s.obs_valid) {
-        cJSON_AddBoolToObject(root, "wifi_connected", s.wifi_connected);
-        cJSON_AddBoolToObject(root, "udp_stale", wx_udp_is_stale(&s));
-        char *json_str = cJSON_PrintUnformatted(root);
-        cJSON_Delete(root);
-        if (!json_str) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
-            return ESP_FAIL;
+    cJSON_AddBoolToObject(root, "wifi_connected", s.wifi_connected);
+    cJSON_AddBoolToObject(root, "udp_stale", wx_udp_is_stale(&s));
+    cJSON_AddBoolToObject(root, "obs_stale", wx_obs_is_stale(&s));
+    cJSON_AddBoolToObject(root, "ws_fallback", tempest_ws_is_active());
+    if (s.current_conditions[0]) {
+        cJSON_AddStringToObject(root, "conditions", s.current_conditions);
+    }
+    web_add_hhmm(root, "sunrise", s.sunrise_epoch);
+    web_add_hhmm(root, "sunset", s.sunset_epoch);
+
+    if (s.obs_valid) {
+        cJSON_AddNumberToObject(root, "temp", (double)cfg_temp(s.air_temp_c));
+        cJSON_AddNumberToObject(root, "feels", (double)cfg_temp(s.feels_like_c));
+        cJSON_AddNumberToObject(root, "dew", (double)cfg_temp(s.dew_point_c));
+        cJSON_AddNumberToObject(root, "humidity", (double)s.humidity_pct);
+        cJSON_AddNumberToObject(root, "wind", (double)cfg_wind(s.wind_avg_ms));
+        cJSON_AddNumberToObject(root, "wind_deg", s.wind_dir_deg);
+        cJSON_AddStringToObject(root, "wind_dir", wx_compass_point(s.wind_dir_deg));
+        cJSON_AddStringToObject(root, "beaufort",
+                                wx_beaufort_name(wx_beaufort_force(s.wind_avg_ms)));
+        cJSON_AddNumberToObject(root, "pressure", (double)cfg_pressure(s.pressure_mb));
+        cJSON_AddStringToObject(root, "trend_str", wx_trend_description(s.pressure_trend));
+        cJSON_AddNumberToObject(root, "rain_rate", (double)cfg_rain(s.rain_rate_mm_hr));
+        cJSON_AddNumberToObject(root, "solar_wm2", (double)s.solar_radiation_wm2);
+        cJSON_AddNumberToObject(root, "uv", (double)s.uv_index);
+        cJSON_AddNumberToObject(root, "battery_v", (double)s.battery_v);
+        cJSON_AddNumberToObject(root, "hub_rssi", s.hub_rssi);
+    }
+    cJSON_AddNumberToObject(root, "rain_today", (double)cfg_rain(s.rain_today_mm));
+    cJSON_AddNumberToObject(root, "rain_7d", (double)cfg_rain(s.rain_7d_mm));
+    cJSON_AddNumberToObject(root, "rain_month", (double)cfg_rain(s.rain_month_mm));
+    cJSON_AddNumberToObject(root, "strikes_3h", s.strikes_3h);
+
+    int nslot = wx_next_precip_slot(&s, 30);
+    if (nslot >= 0) {
+        char when[16];
+        time_t ht = (time_t)s.hourly[nslot].hour_epoch;
+        struct tm htm;
+        localtime_r(&ht, &htm);
+        strftime(when, sizeof(when), "%I %p", &htm);
+        if (when[0] == '0') {
+            memmove(when, when + 1, strlen(when));
         }
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        esp_err_t res = httpd_resp_send(req, json_str, strlen(json_str));
-        free(json_str);
-        return res;
+        char next[48];
+        snprintf(next, sizeof(next), "Next rain %s · %d%%",
+                 when, s.hourly[nslot].precip_probability);
+        cJSON_AddStringToObject(root, "next_rain", next);
+    } else if (s.hourly_valid) {
+        cJSON_AddStringToObject(root, "next_rain", "No rain in 24h");
     }
 
-    cJSON_AddNumberToObject(root, "temp", (double)cfg_temp(s.air_temp_c));
-    cJSON_AddNumberToObject(root, "feels", (double)cfg_temp(s.feels_like_c));
-    cJSON_AddNumberToObject(root, "dew", (double)cfg_temp(s.dew_point_c));
-    cJSON_AddNumberToObject(root, "humidity", (double)s.humidity_pct);
-    cJSON_AddNumberToObject(root, "wind", (double)cfg_wind(s.wind_avg_ms));
-    cJSON_AddNumberToObject(root, "wind_deg", s.wind_dir_deg);
-    cJSON_AddStringToObject(root, "wind_dir", wx_compass_point(s.wind_dir_deg));
-    cJSON_AddNumberToObject(root, "pressure", (double)cfg_pressure(s.pressure_mb));
-    cJSON_AddStringToObject(root, "trend_str", wx_trend_description(s.pressure_trend));
-    cJSON_AddNumberToObject(root, "rain_today", (double)cfg_rain(s.rain_today_mm));
-    cJSON_AddNumberToObject(root, "rain_rate", (double)cfg_rain(s.rain_rate_mm_hr));
-    cJSON_AddNumberToObject(root, "solar_wm2", (double)s.solar_radiation_wm2);
-    cJSON_AddNumberToObject(root, "uv", (double)s.uv_index);
+    if (s.last_strike_epoch > 0 && s.last_strike_dist_km > 0.0f) {
+        int64_t now = (int64_t)time(NULL);
+        int mins = (int)((now - s.last_strike_epoch) / 60);
+        if (mins < 1) {
+            mins = 1;
+        }
+        char strike[48];
+        snprintf(strike, sizeof(strike), "%.1f %s · %d min ago",
+                 (double)cfg_distance(s.last_strike_dist_km),
+                 cfg_distance_suffix(), mins);
+        cJSON_AddStringToObject(root, "last_strike", strike);
+    }
+
+    cJSON *hr_arr = cJSON_AddArrayToObject(root, "hourly");
+    if (hr_arr && s.hourly_valid) {
+        int hn = s.hourly_count;
+        if (hn > 12) {
+            hn = 12;
+        }
+        for (int i = 0; i < hn; i++) {
+            cJSON *h = cJSON_CreateObject();
+            if (!h) {
+                break;
+            }
+            char hh[8];
+            time_t ht = (time_t)s.hourly[i].hour_epoch;
+            struct tm htm;
+            localtime_r(&ht, &htm);
+            int hr12 = htm.tm_hour % 12;
+            if (hr12 == 0) {
+                hr12 = 12;
+            }
+            snprintf(hh, sizeof(hh), "%d%s", hr12, (htm.tm_hour < 12) ? "a" : "p");
+            cJSON_AddStringToObject(h, "hour", hh);
+            cJSON_AddNumberToObject(h, "temp", (double)cfg_temp(s.hourly[i].temp_c));
+            cJSON_AddNumberToObject(h, "pop", s.hourly[i].precip_probability);
+            cJSON_AddItemToArray(hr_arr, h);
+        }
+    }
     cJSON_AddNumberToObject(root, "aqi", s.aqi_valid ? s.aqi_val : 0);
     cJSON_AddStringToObject(root, "aqi_cat", s.aqi_valid ? s.aqi_category : "Unknown");
-    cJSON_AddNumberToObject(root, "battery_v", (double)s.battery_v);
-    cJSON_AddNumberToObject(root, "hub_rssi", s.hub_rssi);
     cJSON_AddBoolToObject(root, "indoor_valid", s.indoor_valid);
     if (s.indoor_valid) {
         cJSON_AddNumberToObject(root, "indoor_temp", (double)cfg_temp(s.indoor_temp_c));
         cJSON_AddNumberToObject(root, "indoor_humidity", (double)s.indoor_humidity_pct);
     }
-    cJSON_AddBoolToObject(root, "obs_stale", wx_obs_is_stale(&s));
-    cJSON_AddBoolToObject(root, "udp_stale", wx_udp_is_stale(&s));
-    cJSON_AddBoolToObject(root, "wifi_connected", s.wifi_connected);
-    cJSON_AddBoolToObject(root, "ws_fallback", tempest_ws_is_active());
 
     nws_alert_t alert = {0};
     if (nws_alerts_get_active(&alert)) {
@@ -366,6 +462,12 @@ static esp_err_t api_history_handler(httpd_req_t *req)
 
 static esp_err_t api_logs_handler(httpd_req_t *req)
 {
+#if CONFIG_OTA_ENABLED
+    if (!ota_password_ok(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "bad password");
+        return ESP_FAIL;
+    }
+#endif
     char path[128];
     esp_err_t err = sdcard_current_log_path(path, sizeof(path));
     if (err != ESP_OK) {
@@ -410,6 +512,12 @@ static esp_err_t api_logs_handler(httpd_req_t *req)
 
 static esp_err_t api_chime_handler(httpd_req_t *req)
 {
+#if CONFIG_OTA_ENABLED
+    if (!ota_password_ok(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "bad password");
+        return ESP_FAIL;
+    }
+#endif
     ESP_LOGI(TAG, "Triggering test hourly chime via API");
     audio_play_chime();
     httpd_resp_set_type(req, "application/json");
@@ -425,6 +533,9 @@ bool web_server_is_running(void)
 esp_err_t web_server_start(void)
 {
     if (s_server) return ESP_OK;
+#if CONFIG_OTA_ENABLED
+    ota_stop();
+#endif
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = WEB_PORT;
@@ -505,4 +616,7 @@ void web_server_stop(void)
         httpd_stop(s_server);
         s_server = NULL;
     }
+#if CONFIG_OTA_ENABLED
+    ota_detach();
+#endif
 }

@@ -4,6 +4,7 @@
 #include "wx_state.h"
 #include "history.h"
 #include "graphs.h"
+#include "display.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +14,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_http_client.h"
+#include "esp_timer.h"
 #include <time.h>
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
@@ -53,6 +55,7 @@ typedef struct {
     char *buf;
     int   len;
     int   cap;
+    bool  overflow;
 } resp_accum_t;
 
 static esp_err_t http_event(esp_http_client_event_t *evt)
@@ -64,7 +67,8 @@ static esp_err_t http_event(esp_http_client_event_t *evt)
     }
     /* Chunked responses arrive in pieces; accumulate before parsing. */
     if (acc->len + evt->data_len >= acc->cap) {
-        ESP_LOGW(TAG, "response exceeds %d bytes, truncating", acc->cap);
+        acc->overflow = true;
+        ESP_LOGW(TAG, "response exceeds %d bytes; dropping fetch", acc->cap);
         return ESP_OK;
     }
     memcpy(acc->buf + acc->len, evt->data, evt->data_len);
@@ -230,54 +234,18 @@ static esp_err_t fetch_open_meteo_forecast(const char *zipcode)
 {
     if (!zipcode || strlen(zipcode) < 5) return ESP_FAIL;
 
-    /* 1. Geocode Zip to Lat/Lon */
-    char zip_url[128];
-    snprintf(zip_url, sizeof(zip_url), "http://api.zippopotam.us/us/%s", zipcode);
-
-    char *resp_buf = malloc(RESP_MAX_BYTES);
-    if (!resp_buf) return ESP_ERR_NO_MEM;
-    resp_buf[0] = '\0';
-
-    resp_accum_t acc = { .buf = resp_buf, .len = 0, .cap = RESP_MAX_BYTES };
-
-    esp_http_client_config_t http_cfg = {
-        .url = zip_url,
-        .event_handler = http_event,
-        .user_data = &acc,
-        .timeout_ms = 8000,
-    };
-
-    esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
-    if (!client) {
-        free(resp_buf);
-        return ESP_FAIL;
-    }
-    esp_err_t err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
-
     float lat = 0.0f, lon = 0.0f;
-    if (err == ESP_OK && status == 200 && acc.len > 0) {
-        cJSON *root = cJSON_Parse(resp_buf);
-        if (root) {
-            cJSON *places = cJSON_GetObjectItemCaseSensitive(root, "places");
-            if (cJSON_IsArray(places) && cJSON_GetArraySize(places) > 0) {
-                cJSON *p0 = cJSON_GetArrayItem(places, 0);
-                cJSON *lat_obj = cJSON_GetObjectItemCaseSensitive(p0, "latitude");
-                cJSON *lon_obj = cJSON_GetObjectItemCaseSensitive(p0, "longitude");
-                if (lat_obj && lon_obj) {
-                    lat = (float)atof(lat_obj->valuestring);
-                    lon = (float)atof(lon_obj->valuestring);
-                }
-            }
-            cJSON_Delete(root);
-        }
-    }
-
-    if (lat == 0.0f && lon == 0.0f) {
-        free(resp_buf);
+    if (geocode_zip(zipcode, &lat, &lon) != ESP_OK) {
         return ESP_FAIL;
     }
+    wx_update_station_location(lat, lon);
+
+    char *resp_buf = heap_caps_malloc(RESP_MAX_BYTES, MALLOC_CAP_SPIRAM);
+    if (!resp_buf) {
+        return ESP_ERR_NO_MEM;
+    }
+    resp_buf[0] = '\0';
+    resp_accum_t acc = { .buf = resp_buf, .len = 0, .cap = RESP_MAX_BYTES };
 
     /* 2. Query 7-Day Forecast from Open-Meteo */
     char fc_url[256];
@@ -297,17 +265,19 @@ static esp_err_t fetch_open_meteo_forecast(const char *zipcode)
         .timeout_ms = 10000,
     };
 
-    client = esp_http_client_init(&fc_cfg);
+    esp_http_client_handle_t client = esp_http_client_init(&fc_cfg);
     if (!client) {
         free(resp_buf);
         return ESP_FAIL;
     }
-    err = esp_http_client_perform(client);
-    status = esp_http_client_get_status_code(client);
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
 
-    if (err != ESP_OK || status != 200 || acc.len == 0) {
-        ESP_LOGE(TAG, "Open-Meteo forecast HTTP failed: %d, err %s", status, esp_err_to_name(err));
+    if (err != ESP_OK || status != 200 || acc.len == 0 || acc.overflow) {
+        ESP_LOGE(TAG, "Open-Meteo forecast HTTP failed: %d, err %s%s",
+                 status, esp_err_to_name(err),
+                 acc.overflow ? " (truncated)" : "");
         free(resp_buf);
         return ESP_FAIL;
     }
@@ -561,7 +531,9 @@ static esp_err_t fetch_open_meteo_extras(const char *zipcode, float lat, float l
                     sum_month += (float)v->valuedouble;
                 }
             }
-            wx_update_rain_totals(sum7, sum_month, sum_month);
+            /* Open-Meteo only gives a month window here. Passing that as
+             * YTD would overwrite the on-device year accumulator. */
+            wx_update_rain_totals(sum7, sum_month, 0);
         }
 
         if (cJSON_IsArray(mr_arr) && cJSON_GetArraySize(mr_arr) > 0) {
@@ -581,12 +553,15 @@ static esp_err_t fetch_open_meteo_extras(const char *zipcode, float lat, float l
 
 esp_err_t tempest_rest_fetch_now(void)
 {
+    display_https_begin();
     cfg_t c;
     cfg_get(&c);
 
     if (TEMPEST_API_TOKEN[0] == '\0') {
         /* No Tempest API key configured -> Use Open-Meteo 7-Day Forecast Engine */
-        return fetch_open_meteo_forecast(c.alert_zipcode);
+        esp_err_t om = fetch_open_meteo_forecast(c.alert_zipcode);
+        display_https_end();
+        return om;
     }
 
     char *url = malloc(512);
@@ -595,6 +570,7 @@ esp_err_t tempest_rest_fetch_now(void)
     if (!url || !acc.buf) {
         free(url);
         free(acc.buf);
+        display_https_end();
         return ESP_ERR_NO_MEM;
     }
     acc.buf[0] = '\0';
@@ -616,7 +592,10 @@ esp_err_t tempest_rest_fetch_now(void)
     int status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
 
-    if (err == ESP_OK && status == 200) {
+    if (acc.overflow) {
+        ESP_LOGE(TAG, "forecast response truncated; ignoring");
+        err = ESP_FAIL;
+    } else if (err == ESP_OK && status == 200) {
         err = parse_forecast(acc.buf, acc.len);
     } else {
         ESP_LOGE(TAG, "forecast fetch failed: %s, HTTP %d",
@@ -630,6 +609,7 @@ esp_err_t tempest_rest_fetch_now(void)
     if (err == ESP_OK) {
         fetch_open_meteo_extras(c.alert_zipcode, 0.0f, 0.0f);
     }
+    display_https_end();
     return err;
 }
 
@@ -690,8 +670,10 @@ static int rest_get(const char *url, char *buf, int cap)
     int status = esp_http_client_get_status_code(c);
     esp_http_client_cleanup(c);
 
-    if (err != ESP_OK || status != 200) {
-        ESP_LOGE(TAG, "GET failed: %s, HTTP %d", esp_err_to_name(err), status);
+    if (err != ESP_OK || status != 200 || acc.overflow) {
+        ESP_LOGE(TAG, "GET failed: %s, HTTP %d%s",
+                 esp_err_to_name(err), status,
+                 acc.overflow ? " (truncated)" : "");
         return -1;
     }
     return acc.len;
@@ -805,7 +787,9 @@ esp_err_t tempest_rest_backfill_history(void)
         ESP_LOGW(TAG, "no API token; graphs will fill from live data only");
         return ESP_ERR_INVALID_STATE;
     }
+    display_https_begin();
     if (discover_device_id() != ESP_OK) {
+        display_https_end();
         return ESP_FAIL;
     }
 
@@ -816,6 +800,7 @@ esp_err_t tempest_rest_backfill_history(void)
     if (!url || !buf) {
         free(url);
         free(buf);
+        display_https_end();
         return ESP_ERR_NO_MEM;
     }
 
@@ -853,10 +838,12 @@ esp_err_t tempest_rest_backfill_history(void)
 
     if (total == 0) {
         ESP_LOGW(TAG, "backfill returned no observations");
+        display_https_end();
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "backfilled %d observations into the trend graphs", total);
     graphs_request_redraw();
+    display_https_end();
     return ESP_OK;
 }
 
@@ -887,12 +874,25 @@ static void rest_task(void *arg)
     } else {
         ESP_LOGW(TAG, "clock unsynced; history backfill deferred");
     }
+    vTaskDelay(pdMS_TO_TICKS(300));
+    display_recover_after_sdio("forecast-boot");
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(CONFIG_TEMPEST_FORECAST_INTERVAL_S * 1000));
+        ESP_LOGI(TAG, "forecast poll begin (uptime %lld s, heap %u/%u)",
+                 (long long)(esp_timer_get_time() / 1000000LL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         if (tempest_rest_fetch_now() == ESP_OK) {
             try_history_backfill();
         }
+        /* Large HTTPS rides the C6 SDIO link. That is the same bus that
+         * blanks the panel at boot; settle, then ask LVGL to wake MIPI. */
+        vTaskDelay(pdMS_TO_TICKS(300));
+        display_recover_after_sdio("forecast");
+        ESP_LOGI(TAG, "forecast poll end (heap %u/%u)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     }
 }
 
@@ -913,6 +913,11 @@ esp_err_t tempest_rest_start(void)
 int tempest_rest_device_id(void)
 {
     return s_device_id;
+}
+
+bool tempest_rest_has_token(void)
+{
+    return TEMPEST_API_TOKEN[0] != '\0';
 }
 
 esp_err_t tempest_rest_ensure_device_id(void)

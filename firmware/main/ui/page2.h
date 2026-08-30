@@ -1,6 +1,6 @@
 #pragma once
 /*
- * Second screen: lunar arc / moon phase and 24-hour hourly timeline.
+ * Sky page: insight chips, lunar arc / moon phase, sun times, and 24-hour hourly.
  * Night standby overlay is still owned here.
  */
 

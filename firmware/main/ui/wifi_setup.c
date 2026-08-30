@@ -1,4 +1,5 @@
 #include "wifi_setup.h"
+#include "ui.h"
 #include "config.h"
 #include "net.h"
 #include "audio.h"
@@ -16,7 +17,7 @@ static const char *TAG = "wifi_ui";
 
 bool settings_is_visible(void);
 
-/* Match the dashboard palette — dark surfaces, bright text, muted accents. */
+/* Match the dashboard palette - dark surfaces, bright text, muted accents. */
 #define COL_BG          lv_color_hex(0x06090E)
 #define COL_CARD        lv_color_hex(0x0F141C)
 #define COL_ROW         lv_color_hex(0x141B26)
@@ -197,7 +198,7 @@ static void update_pass_hint(void)
         return;
     }
     if (s_chosen_open) {
-        lv_label_set_text(s_pass_hint, "Open network — no password needed");
+        lv_label_set_text(s_pass_hint, "Open network - no password needed");
         lv_obj_set_style_text_color(s_pass_hint, COL_OK, 0);
         return;
     }
@@ -530,7 +531,7 @@ static void on_ap_clicked(lv_event_t *e)
         lv_obj_add_state(s_pass_ta, LV_STATE_DISABLED);
         lv_textarea_set_placeholder_text(s_pass_ta, "not required");
         kb_hide();
-        set_status("open network — tap Connect", COL_DIM);
+        set_status("open network - tap Connect", COL_DIM);
     } else {
         lv_obj_clear_state(s_pass_ta, LV_STATE_DISABLED);
         lv_textarea_set_placeholder_text(s_pass_ta,
@@ -565,9 +566,9 @@ static void publish_scan_results(void)
     s_ap_count = (n > 0) ? n : 0;
 
     if (n < 0) {
-        set_status("scan failed — is the radio up?", COL_ALERT);
+        set_status("scan failed - is the radio up?", COL_ALERT);
     } else if (n == 0) {
-        set_status("no networks found — tap Scan to retry", COL_ALERT);
+        set_status("no networks found - tap Scan to retry", COL_ALERT);
     } else {
         const char *saved = net_current_ssid();
         for (int i = 0; i < n; i++) {
@@ -614,9 +615,9 @@ static void publish_scan_results(void)
         }
         if (s_chosen_ssid[0]) {
             if (s_chosen_open) {
-                set_status("saved network found — tap Connect", COL_DIM);
+                set_status("saved network found - tap Connect", COL_DIM);
             } else {
-                set_status("saved network found — enter password", COL_DIM);
+                set_status("saved network found - enter password", COL_DIM);
             }
         } else {
             set_status("pick a network", COL_DIM);
@@ -775,11 +776,11 @@ static void style_keyboard(lv_obj_t *kb)
 
 esp_err_t wifi_setup_init(void)
 {
-    /* Overlay on lv_layer_top() — never lv_screen_load() here. Switching screens
+    /* Overlay on lv_layer_top() - never lv_screen_load() here. Switching screens
      * while the SDIO radio is active has repeatedly left the MIPI panel with
      * backlight on and no framebuffer (light-blue edge glow). */
     s_screen = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(s_screen, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_size(s_screen, UI_SCR_W, UI_CONTENT_H);
     lv_obj_set_pos(s_screen, 0, 0);
     lv_obj_set_style_bg_color(s_screen, COL_BG, 0);
     lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, 0);
@@ -809,7 +810,7 @@ esp_err_t wifi_setup_init(void)
 
     s_list = lv_list_create(s_screen);
     lv_obj_set_pos(s_list, 24, 78);
-    lv_obj_set_size(s_list, 470, 480);
+    lv_obj_set_size(s_list, 470, 430);
     lv_obj_set_style_bg_color(s_list, COL_CARD, 0);
     lv_obj_set_style_border_color(s_list, COL_BORDER, 0);
     lv_obj_set_style_border_width(s_list, 1, 0);
@@ -918,7 +919,7 @@ void wifi_setup_tick(void)
         }
         if (now >= s_connect_deadline) {
             s_connecting = false;
-            set_status("could not connect — check password and try again",
+            set_status("could not connect - check password and try again",
                        COL_ALERT);
             set_connect_enabled(true);
         }
@@ -968,16 +969,17 @@ void wifi_setup_show(void)
         set_status(buf, COL_OK);
     } else if (net_current_ssid()[0]) {
         preload_saved_network();
-        set_status("saved network loaded — tap Scan or Connect", COL_DIM);
+        set_status("saved network loaded - tap Scan or Connect", COL_DIM);
     } else {
         set_status("tap Scan to find networks", COL_DIM);
     }
 
     lv_obj_remove_flag(s_screen, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_screen);
+    ui_ticker_raise();
     lv_obj_invalidate(s_screen);
 
-    /* One-shot reconnect using saved NVS credentials — no scan, no keyboard. */
+    /* One-shot reconnect using saved NVS credentials - no scan, no keyboard. */
     if (!net_is_connected() && net_current_ssid()[0] != '\0') {
         connect_req_t *req = calloc(1, sizeof(connect_req_t));
         if (req) {

@@ -30,12 +30,12 @@ void screenshot_dump(void)
     }
 
     lv_draw_buf_t *draw_buf = lv_snapshot_take(scr, LV_COLOR_FORMAT_RGB565);
-    display_unlock();
-
     if (!draw_buf || !draw_buf->data) {
+        display_unlock();
         ESP_LOGE(TAG, "lv_snapshot_take failed");
         return;
     }
+    display_unlock();
 
     uint32_t w = draw_buf->header.w;
     uint32_t h = draw_buf->header.h;
@@ -64,7 +64,12 @@ void screenshot_dump(void)
     printf("===SCREENSHOT_HEX_END===\n");
     fflush(stdout);
 
-    lv_draw_buf_destroy(draw_buf);
+    if (display_lock(2000)) {
+        lv_draw_buf_destroy(draw_buf);
+        display_unlock();
+    } else {
+        ESP_LOGW(TAG, "could not lock to free snapshot; leaking one buffer");
+    }
     ESP_LOGI(TAG, "screenshot ASCII-RLE transfer complete");
 }
 

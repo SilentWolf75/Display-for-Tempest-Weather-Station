@@ -29,6 +29,7 @@ typedef enum {
     HIST_PRESSURE,
     HIST_WIND,
     HIST_HUMIDITY,
+    HIST_RAIN,
     HIST_SERIES_COUNT,
 } hist_series_t;
 

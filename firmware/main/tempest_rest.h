@@ -9,6 +9,7 @@
  * Requires a personal access token in secrets.h.
  */
 
+#include <stdbool.h>
 #include "esp_err.h"
 
 /* Starts a task that polls every CONFIG_TEMPEST_FORECAST_INTERVAL_S seconds
@@ -31,6 +32,9 @@ void tempest_rest_on_clock_sync(void);
 
 /* Returns the Tempest device_id (0 until discovered). */
 int tempest_rest_device_id(void);
+
+/* True when secrets.h has a non-empty API token. Does not print it. */
+bool tempest_rest_has_token(void);
 
 /* Blocks until device_id is known or discovery fails. */
 esp_err_t tempest_rest_ensure_device_id(void);

@@ -13,6 +13,7 @@ int SAMMain();
 
 char* GetBuffer();
 int GetBufferLength();
+void SamReleaseBuffer(void);
 
 
 //char input[]={"/HAALAOAO MAYN NAAMAEAE IHSTT SAEBAASTTIHAAN \x9b\x9b\0"};

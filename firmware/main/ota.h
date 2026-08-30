@@ -29,6 +29,16 @@ esp_err_t ota_register(httpd_handle_t server);
 /* Standalone server on port 80 when the web dashboard is disabled. */
 esp_err_t ota_start(void);
 
+/* Stop a standalone OTA server we own. No-op if mounted on the dashboard. */
+void ota_stop(void);
+
+/* Dashboard httpd was stopped; drop our handle so ota_start() can take over. */
+void ota_detach(void);
+
+/* True when no password is configured, or the request carries it
+ * (X-OTA-Password header or ?p= query). Shared with /api/chime and /api/logs. */
+bool ota_password_ok(httpd_req_t *req);
+
 void ota_mark_valid(void);
 
 bool ota_in_progress(void);

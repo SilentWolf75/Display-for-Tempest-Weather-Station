@@ -64,6 +64,12 @@ void EnableSingmode() {singmode = 1;}
 char* GetBuffer(){return buffer;}
 int GetBufferLength(){return bufferpos;}
 
+void SamReleaseBuffer(void)
+{
+    free(buffer);
+    buffer = NULL;
+}
+
 void Init();
 int Parser1();
 void Parser2();
@@ -92,8 +98,10 @@ void Init()
     SetMouthThroat( mouth, throat);
 
     bufferpos = 0;
-    // TODO, check for free the memory, 10 seconds of output should be more than enough
-    buffer = malloc(22050*10);
+    /* 10 s of 8-bit PCM. Reuse so each utterance does not leak 220 KB. */
+    if (!buffer) {
+        buffer = malloc(22050 * 10);
+    }
 
     /*
     freq2data = &mem[45136];
@@ -139,6 +147,9 @@ void Init()
 int SAMMain()
 {
     Init();
+    if (!buffer) {
+        return 0;
+    }
     phonemeindex[255] = 32; //to prevent buffer overflow
 
     if (!Parser1()) return 0;

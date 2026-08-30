@@ -14,6 +14,8 @@ idf_component_register(
         "ui/settings.c"
         "ui/graphs.c"
         "ui/page2.c"
+        "ui/week.c"
+        "ui/alerts.c"
         "ui/wifi_setup.c"
         "history.c"
         "config.c"

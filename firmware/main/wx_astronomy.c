@@ -1,8 +1,13 @@
 #include "wx_astronomy.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+/* Gardner / 66030 — same default the moon helpers already use. */
+#define DEFAULT_LAT  38.8075f
+#define DEFAULT_LON  (-94.9157f)
 
 #define SYNODIC_DAYS  29.530588853
 
@@ -107,11 +112,72 @@ static void get_lunar_coords(int64_t epoch, float lon_deg, double *out_dec, doub
     *out_ha  = ha;
 }
 
+float wx_sun_altitude_deg(int64_t epoch, float lat_deg, float lon_deg)
+{
+    if (lat_deg == 0.0f && lon_deg == 0.0f) {
+        lat_deg = DEFAULT_LAT;
+        lon_deg = DEFAULT_LON;
+    }
+    if (epoch < 1600000000LL) {
+        return 45.0f;
+    }
+
+    /* Compact NOAA solar position: good to ~0.3° — enough for day/night. */
+    double d = (double)epoch / 86400.0 + 2440587.5 - 2451545.0;
+    double g = fmod(357.529 + 0.98560028 * d, 360.0) * M_PI / 180.0;
+    double q = fmod(280.459 + 0.98564736 * d, 360.0);
+    double L = (q + 1.915 * sin(g) + 0.020 * sin(2.0 * g)) * M_PI / 180.0;
+    double e = (23.439 - 0.00000036 * d) * M_PI / 180.0;
+    double ra = atan2(cos(e) * sin(L), cos(L));
+    double dec = asin(sin(e) * sin(L));
+
+    double gmst = fmod(280.46061837 + 360.98564736629 * d, 360.0) * M_PI / 180.0;
+    double ha = gmst + (double)lon_deg * M_PI / 180.0 - ra;
+    while (ha > M_PI) {
+        ha -= 2.0 * M_PI;
+    }
+    while (ha < -M_PI) {
+        ha += 2.0 * M_PI;
+    }
+
+    double lat = (double)lat_deg * M_PI / 180.0;
+    double sin_alt = sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(ha);
+    if (sin_alt > 1.0) {
+        sin_alt = 1.0;
+    }
+    if (sin_alt < -1.0) {
+        sin_alt = -1.0;
+    }
+    return (float)(asin(sin_alt) * 180.0 / M_PI);
+}
+
+bool wx_is_daylight(int64_t now, int64_t sunrise_epoch, int64_t sunset_epoch,
+                    float lat_deg, float lon_deg)
+{
+    if (now < 1600000000LL) {
+        return true;
+    }
+
+    /* Trust the forecast pair only while it still describes this solar day.
+     * Yesterday's sunset would otherwise keep us "night" all morning. */
+    if (sunrise_epoch > 0 && sunset_epoch > sunrise_epoch) {
+        int64_t span = sunset_epoch - sunrise_epoch;
+        if (span > 6 * 3600 && span < 20 * 3600 &&
+            now >= sunrise_epoch - 6 * 3600 &&
+            now <= sunset_epoch + 6 * 3600) {
+            return now >= sunrise_epoch && now < sunset_epoch;
+        }
+    }
+
+    /* −0.83° is the usual refraction correction at geometric sunrise. */
+    return wx_sun_altitude_deg(now, lat_deg, lon_deg) > -0.83f;
+}
+
 float wx_moon_altitude_calc(int64_t epoch, float lat_deg, float lon_deg)
 {
     if (lat_deg == 0.0f && lon_deg == 0.0f) {
-        lat_deg = 38.8075f;
-        lon_deg = -94.9157f;
+        lat_deg = DEFAULT_LAT;
+        lon_deg = DEFAULT_LON;
     }
     double dec = 0.0, ha = 0.0;
     get_lunar_coords(epoch, lon_deg, &dec, &ha);
@@ -127,8 +193,8 @@ float wx_moon_altitude_calc(int64_t epoch, float lat_deg, float lon_deg)
 float wx_moon_sky_fraction(int64_t epoch, float lat_deg, float lon_deg)
 {
     if (lat_deg == 0.0f && lon_deg == 0.0f) {
-        lat_deg = 38.8075f;
-        lon_deg = -94.9157f;
+        lat_deg = DEFAULT_LAT;
+        lon_deg = DEFAULT_LON;
     }
     double dec = 0.0, ha = 0.0;
     get_lunar_coords(epoch, lon_deg, &dec, &ha);
@@ -150,4 +216,22 @@ float wx_moon_sky_fraction(int64_t epoch, float lat_deg, float lon_deg)
     if (f < 0.0) f = 0.0;
     if (f > 1.0) f = 1.0;
     return (float)f;
+}
+
+float wx_moon_days_until_full(float age_days)
+{
+    float full = (float)SYNODIC_DAYS * 0.5f;
+    float d = full - age_days;
+    if (d < 0.0f) {
+        d += (float)SYNODIC_DAYS;
+    }
+    return d;
+}
+
+float wx_moon_days_until_new(float age_days)
+{
+    if (age_days <= 0.0f) {
+        return 0.0f;
+    }
+    return (float)SYNODIC_DAYS - age_days;
 }

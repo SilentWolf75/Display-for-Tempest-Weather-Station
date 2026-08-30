@@ -29,8 +29,12 @@ esp_err_t wx_icons_init(void);
 lv_obj_t *wx_icon_create(lv_obj_t *parent, int size, bool animate);
 
 /* Swaps the artwork. Safe to call every tick: a repeat of the current slug is
- * ignored, so this does not reload the JSON 60 times a minute. */
-void wx_icon_set(lv_obj_t *icon, const char *slug);
+ * ignored, so this does not reload the JSON 60 times a minute.
+ * Returns false if neither the slug nor the unknown fallback could load. */
+bool wx_icon_set(lv_obj_t *icon, const char *slug);
 
 /* True when the slug means precipitation, for tinting the forecast column. */
 bool wx_icon_is_wet(const char *slug);
+
+/* Stop ThorVG while LIVE is covered. Hidden widgets still animate. */
+void wx_icon_set_paused(lv_obj_t *icon, bool paused);

@@ -56,6 +56,7 @@ typedef struct {
     bool        lightning_alert_sound; /* Short siren when strike within 6 mi */
     bool        lightning_alert_voice; /* Spoken proximity alert for lightning */
     float       indoor_temp_offset_c;  /* User trim on auto board-heat correction (-10..+10 C) */
+    uint8_t     start_page;            /* 0=LIVE .. 4=ALERTS; applied after boot */
 } cfg_t;
 
 esp_err_t cfg_init(void);
