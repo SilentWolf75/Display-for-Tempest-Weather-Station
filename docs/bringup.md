@@ -136,8 +136,8 @@ Once on the network, browse to `http://tempest.local:8080/ota` (or
 `http://<device-ip>:8080/ota`). Upload **`tempest_display.bin`** from a
 [GitHub release](https://github.com/SilentWolf75/tempest-weather-display/releases/latest)
 — the app image only, about 2.6 MB. The merged factory image is for the
-[USB web flasher](https://silentwolf75.github.io/tempest-weather-display/) and
-will be rejected (or brick the OTA slot) if posted here.
+USB web flasher (`install.html` in the same release) and must not be posted
+to `/ota`.
 
 Scripted:
 

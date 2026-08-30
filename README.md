@@ -100,13 +100,14 @@ RADAR page.
 
 ## Install
 
-**First flash (USB, browser):** https://silentwolf75.github.io/tempest-weather-display/
+Release binaries: [v1.0.0](https://github.com/SilentWolf75/tempest-weather-display/releases/tag/v1.0.0)
 
-Chrome or Edge, 5 V / 2 A supply. That writes bootloader, app, and icon storage.
+**First flash (USB):** download `install.html` and `merged-firmware.bin` from the
+release. Open the HTML in Chrome or Edge, choose the merged bin, Connect.
+Use a **5 V / 2 A** supply.
 
-**Later updates (OTA):** download `tempest_display.bin` from the
-[latest GitHub release](https://github.com/SilentWolf75/tempest-weather-display/releases/latest)
-and upload it at [http://tempest.local:8080/ota](http://tempest.local:8080/ota).
+**Later updates (OTA):** download `tempest_display.bin` (app only) and upload it
+at [http://tempest.local:8080/ota](http://tempest.local:8080/ota).
 Do not OTA the merged factory image — that is USB-only.
 
 ## Try it now, without hardware
