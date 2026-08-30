@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 # ESP32-P4 only. The board has no other target.
 set(COMPONENTS main)
+set(PROJECT_VER "1.0.0")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(tempest_display)

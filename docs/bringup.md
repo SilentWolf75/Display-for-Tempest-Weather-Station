@@ -132,13 +132,17 @@ failing to boot, so a dead GT911 still gives you a working weather display.
 
 ## 7. OTA
 
-Once on the network, browse to `http://<device-ip>/`. The page shows version,
-build date, running slot, and free heap, with an upload form.
+Once on the network, browse to `http://tempest.local:8080/ota` (or
+`http://<device-ip>:8080/ota`). Upload **`tempest_display.bin`** from a
+[GitHub release](https://github.com/SilentWolf75/tempest-weather-display/releases/latest)
+— the app image only, about 2.6 MB. The merged factory image is for the
+[USB web flasher](https://silentwolf75.github.io/tempest-weather-display/) and
+will be rejected (or brick the OTA slot) if posted here.
 
 Scripted:
 
 ```bash
-curl -X POST --data-binary @firmware/build/tempest_display.bin -H "X-OTA-Password: yourpassword" http://192.168.1.50:8080/ota/update
+curl -X POST --data-binary @tempest_display.bin -H "X-OTA-Password: yourpassword" http://tempest.local:8080/ota/update
 ```
 
 **Set `CONFIG_OTA_PASSWORD` in menuconfig.** Empty means anyone on your network
@@ -162,7 +166,7 @@ panel.
 | phy_init | 0x13000 | 4 K |
 | ota_0 | 0x20000 | 3 M |
 | ota_1 | 0x320000 | 3 M |
-| storage (icons) | 0x620000 | 2 M |
+| storage (icons) | 0x620000 | 6 M |
 
 The table sits at 0xA000 rather than the 0x8000 default: the OTA-capable
 bootloader grew to within 256 bytes of the default budget, and overflowing it

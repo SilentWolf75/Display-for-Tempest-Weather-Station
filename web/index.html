@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tempest Weather Display — Install</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card: #151d2c;
+      --border: #243048;
+      --text: #f8fafc;
+      --dim: #94a3b8;
+      --accent: #38bdf8;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 32px 20px;
+      line-height: 1.5;
+    }
+    main { max-width: 40rem; margin: 0 auto; }
+    h1 { color: var(--accent); font-size: 1.6rem; margin: 0 0 0.4rem; }
+    .sub { color: var(--dim); margin-bottom: 1.5rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    h2 { font-size: 1rem; margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); }
+    code, kbd { font-size: 0.9em; background: #0b0f19; padding: 0.1em 0.4em; border-radius: 4px; }
+    a { color: var(--accent); }
+    esp-web-install-button { margin-top: 8px; }
+    ul { margin: 0; padding-left: 1.2rem; color: var(--dim); }
+    li { margin: 0.35rem 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Display for Tempest Weather Station</h1>
+    <p class="sub">Elecrow CrowPanel Advance 10.1&quot; (ESP32-P4) &mdash; version 1.0.0</p>
+
+    <div class="card">
+      <h2>First install (USB)</h2>
+      <p>Chrome or Edge, USB cable, <strong>5 V / 2 A</strong> supply (PC USB ports brown out this panel). Puts bootloader, app, and icon storage on the flash in one shot.</p>
+      <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+      <p class="sub">If the button is missing, this browser does not support Web Serial.</p>
+    </div>
+
+    <div class="card">
+      <h2>Later updates (OTA)</h2>
+      <p>Once the panel is on Wi-Fi, do <em>not</em> re-flash the merged image. Upload only the app binary:</p>
+      <ul>
+        <li>Browser: <a href="http://tempest.local:8080/ota">http://tempest.local:8080/ota</a></li>
+        <li>File: <code>tempest_display.bin</code> from the <a href="https://github.com/SilentWolf75/tempest-weather-display/releases/latest">latest release</a> (not <code>merged-firmware.bin</code>)</li>
+        <li>Script: <code>curl -X POST --data-binary @tempest_display.bin http://tempest.local:8080/ota/update</code></li>
+      </ul>
+      <p>OTA writes the unused 3 MB slot and reboots. A bad image rolls back automatically. It does <strong>not</strong> rewrite the SPIFFS icon partition.</p>
+    </div>
+  </main>
+</body>
+</html>

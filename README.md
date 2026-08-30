@@ -98,6 +98,17 @@ does not measure particles.
 `/radar` is station status only. The nearest NEXRAD id is stored for a later
 RADAR page.
 
+## Install
+
+**First flash (USB, browser):** https://silentwolf75.github.io/tempest-weather-display/
+
+Chrome or Edge, 5 V / 2 A supply. That writes bootloader, app, and icon storage.
+
+**Later updates (OTA):** download `tempest_display.bin` from the
+[latest GitHub release](https://github.com/SilentWolf75/tempest-weather-display/releases/latest)
+and upload it at [http://tempest.local:8080/ota](http://tempest.local:8080/ota).
+Do not OTA the merged factory image — that is USB-only.
+
 ## Try it now, without hardware
 
 The Python tools work today and need nothing but a PC on the same LAN.
