@@ -90,6 +90,16 @@ ALERTS. Settings → Display → Start Page picks which page boots.
 | **24H** | Local temperature / pressure / wind / humidity graphs |
 | **ALERTS** | Full NWS warning text, or all-clear with official forecast + office/radar id |
 
+<img src="docs/screenshots/live.png" alt="LIVE page" width="100%">
+
+| SKY | WEEK |
+| --- | --- |
+| <img src="docs/screenshots/sky.png" alt="SKY page"> | <img src="docs/screenshots/week.png" alt="WEEK page"> |
+
+| 24H | ALERTS |
+| --- | --- |
+| <img src="docs/screenshots/24h.png" alt="24H page"> | <img src="docs/screenshots/alerts.png" alt="ALERTS page"> |
+
 **AQI is outdoor** (Open-Meteo `us_aqi` + PM2.5 for the zip). The Grove sensor
 does not measure particles.
 
@@ -189,7 +199,7 @@ firmware/      ESP-IDF project
     web_server.c      LAN dashboard at http://tempest.local:8080
     ui/ui.c           LIVE dashboard + global ticker
   spiffs/icons/     generated artwork (python tools/build_icons.py)
-tools/         Python listener, simulator, and icon builder
+tools/         Python listener, simulator, icon builder, UART screenshot
 ```
 
 ## Reliability and data coverage

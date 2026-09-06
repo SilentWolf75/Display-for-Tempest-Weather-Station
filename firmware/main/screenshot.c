@@ -9,7 +9,6 @@
 #include "driver/uart.h"
 #include "esp_vfs_dev.h"
 #include "lvgl.h"
-#include "others/snapshot/lv_snapshot.h"
 
 static const char *TAG = "screenshot";
 
@@ -79,17 +78,20 @@ static void screenshot_task(void *pvParameters)
     uint8_t rx_buf[64];
     int idx = 0;
 
-    uart_config_t uart_config = {
-        .baud_rate = 115200,
-        .data_bits = UART_DATA_8_BITS,
-        .parity    = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
-    };
-    uart_param_config(UART_NUM_0, &uart_config);
-    uart_driver_install(UART_NUM_0, 1024, 1024, 0, NULL, 0);
-    esp_vfs_dev_uart_use_driver(UART_NUM_0);
+    /* Console already owns UART0. Only attach a driver if nobody has. */
+    if (!uart_is_driver_installed(UART_NUM_0)) {
+        uart_config_t uart_config = {
+            .baud_rate = 115200,
+            .data_bits = UART_DATA_8_BITS,
+            .parity    = UART_PARITY_DISABLE,
+            .stop_bits = UART_STOP_BITS_1,
+            .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+            .source_clk = UART_SCLK_DEFAULT,
+        };
+        uart_param_config(UART_NUM_0, &uart_config);
+        uart_driver_install(UART_NUM_0, 1024, 1024, 0, NULL, 0);
+        esp_vfs_dev_uart_use_driver(UART_NUM_0);
+    }
 
     while (1) {
         uint8_t ch = 0;

@@ -42,6 +42,7 @@ idf_component_register(
         "mqtt_client_app.c"
         "wx_astronomy.c"
         "tempest_ws.c"
+        "screenshot.c"
     EMBED_TXTFILES "ota.html" "ota.js"
     INCLUDE_DIRS
         "."

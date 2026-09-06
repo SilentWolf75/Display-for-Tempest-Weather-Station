@@ -201,6 +201,7 @@ CONFIG_LV_USE_THORVG=y
 CONFIG_LV_USE_THORVG_INTERNAL=y
 CONFIG_LV_USE_LOTTIE=y
 CONFIG_LV_USE_MATRIX=y
+CONFIG_LV_USE_SNAPSHOT=y
 
 # --- SPIFFS: the icon partition ---
 # Default object-name length is 32 chars, and paths like

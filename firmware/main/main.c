@@ -44,6 +44,7 @@
 #include "sdcard.h"
 #include "ui/ui.h"
 #include "ui/wx_icons.h"
+#include "screenshot.h"
 
 static const char *TAG = "main";
 
@@ -321,6 +322,12 @@ void app_main(void)
      * on the next reset instead of stranding a wall-mounted panel. */
     EventBits_t ready = s_boot_events ? xEventGroupGetBits(s_boot_events) : 0;
     ota_validate_boot(s_display_up, (ready & BOOT_UI_SUCCESS_BIT) != 0, s_ui_timer != NULL);
+
+    /* UART "screenshot" / "capture" dumps the LVGL framebuffer as hex-RLE.
+     * After display+UI so lv_snapshot_take has a screen. */
+    if (s_display_up) {
+        screenshot_init();
+    }
 
     uint32_t last_count = 0;
     while (1) {
