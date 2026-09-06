@@ -27,6 +27,7 @@ typedef struct {
     int     size;
     bool    animate;
     bool    paused;
+    void  (*render_frame)(void *, int32_t);
     size_t  json_len;
     char    slug[40];
 } icon_ctx_t;
@@ -196,6 +197,8 @@ lv_obj_t *wx_icon_create(lv_obj_t *parent, int size, bool animate)
 
     lv_obj_t *obj = lv_lottie_create(parent);
     lv_lottie_set_buffer(obj, size, size, ctx->pixels);
+    lv_anim_t *anim = lv_lottie_get_anim(obj);
+    ctx->render_frame = anim ? anim->exec_cb : NULL;
     lv_obj_set_size(obj, size, size);
     lv_obj_add_event_cb(obj, icon_delete_cb, LV_EVENT_DELETE, ctx);
     lv_obj_set_user_data(obj, ctx);
@@ -245,21 +248,19 @@ bool wx_icon_set(lv_obj_t *icon, const char *slug)
     if (!ctx->animate) {
         /* set_src_data renders frame 0, which for Meteocons is the empty
          * draw-in. Jump to a late frame so the static strip shows the
-         * finished sun/cloud, then drop the animator. */
+         * finished sun/cloud, then disable its render callback. Keep the
+         * timer allocated: Lottie retains and updates its pointer on source changes. */
         lv_anim_t *a = lv_lottie_get_anim(icon);
-        if (a && a->exec_cb) {
+        if (a && ctx->render_frame) {
             int32_t last = a->end_value > 1 ? a->end_value - 1 : 0;
-            a->exec_cb(a->var, last);
+            ctx->render_frame(a->var, last);
             a->current_value = last;
         }
-        lv_anim_delete(icon, NULL);
+        if (a) lv_anim_set_exec_cb(a, NULL);
     }
 
     ESP_LOGD(TAG, "icon '%s' loaded (%u B, %s)", slug, (unsigned)len,
              ctx->animate ? "animated" : "static");
-    if (ctx->paused && ctx->animate) {
-        lv_anim_delete(icon, NULL);
-    }
     return true;
 }
 
@@ -273,11 +274,13 @@ void wx_icon_set_paused(lv_obj_t *icon, bool paused)
         return;
     }
     ctx->paused = paused;
+    /* LVGL 9.2 keeps lottie->anim for the widget lifetime. Deleting it
+     * leaves a dangling pointer that set_src_data later writes through.
+     * Its render callback already skips hidden objects, so keep the timer
+     * alive and let visibility pause rendering without reloading artwork. */
     if (paused) {
-        lv_anim_delete(icon, NULL);
-        return;
-    }
-    if (ctx->json && ctx->json_len) {
-        lv_lottie_set_src_data(icon, ctx->json, ctx->json_len);
+        lv_obj_add_flag(icon, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(icon, LV_OBJ_FLAG_HIDDEN);
     }
 }

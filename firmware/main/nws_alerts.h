@@ -29,6 +29,7 @@ esp_err_t nws_alerts_start(void);
  * Trigger an immediate refresh of weather alerts.
  */
 void nws_alerts_refresh(void);
+bool nws_alerts_is_current(void);
 
 /**
  * Get current active emergency alert info (thread-safe).

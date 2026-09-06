@@ -134,7 +134,7 @@ failing to boot, so a dead GT911 still gives you a working weather display.
 
 Once on the network, browse to `http://tempest.local:8080/ota` (or
 `http://<device-ip>:8080/ota`). Upload **`tempest_display.bin`** from a
-[GitHub release](https://github.com/SilentWolf75/tempest-weather-display/releases/latest)
+[GitHub release](https://github.com/SilentWolf75/Display-for-Tempest-Weather-Station/releases/latest)
 — the app image only, about 2.6 MB. The merged factory image is for the
 USB web flasher (`install.html` in the same release) and must not be posted
 to `/ota`.
@@ -174,3 +174,18 @@ is a hard build failure with an unhelpful message.
 
 App is ~2.04 MB of the 3 MB slot. If it ever approaches 3 MB, resize both slots
 together — they must match.
+
+## September 4 reliability-fix validation
+
+Before treating this firmware as hardware-validated, exercise:
+- A browser upload of the app image, including a wrong password and interrupted transfer.
+- UDP silence with Wi-Fi working: WebSocket remains connected until real UDP resumes.
+- Turning off the dashboard: after the next health cycle it stays off, while OTA uses port 80.
+- Restarting after a saved rain observation: measured totals/high-low return with partial coverage.
+- Changing ZIP: touch remains responsive while the background update runs.
+- Multiple simultaneous alerts and an expired alert during a network outage.
+- Graph gaps after disconnecting the hub, and live packets arriving during backfill.
+- A test OTA image with failed display readiness: rollback stays armed.
+
+The host regression suite checks logic; none of these on-device checks was run
+as part of the source fix. SPIFFS artwork/audio and the enclosure were unchanged.

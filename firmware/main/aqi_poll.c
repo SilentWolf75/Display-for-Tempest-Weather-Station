@@ -207,7 +207,7 @@ static void poll_aqi(void)
         int us_aqi = (us_aqi_obj && cJSON_IsNumber(us_aqi_obj)) ? us_aqi_obj->valueint : 0;
         float pm25 = (pm25_obj && cJSON_IsNumber(pm25_obj)) ? (float)pm25_obj->valuedouble : 0.0f;
 
-        if (us_aqi > 0) {
+        if (cJSON_IsNumber(us_aqi_obj) && us_aqi >= 0) {
             const char *cat = aqi_category_for_val(us_aqi);
             ESP_LOGI(TAG, "Air Quality Update: AQI %d (%s), PM2.5 %.1f ug/m3", us_aqi, cat, pm25);
             wx_update_aqi(us_aqi, cat, pm25);
@@ -238,7 +238,7 @@ static void aqi_task(void *arg)
 
 esp_err_t aqi_poll_start(void)
 {
-    xTaskCreate(aqi_task, "aqi_task", 10 * 1024, NULL, 3, NULL);
+    xTaskCreate(aqi_task, "aqi_task", 8 * 1024, NULL, 3, NULL);
     return ESP_OK;
 }
 

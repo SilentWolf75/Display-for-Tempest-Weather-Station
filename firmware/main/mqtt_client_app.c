@@ -104,11 +104,14 @@ static void publish_state(void)
 
     publish_availability(&s);
 
-    if (!s.obs_valid) {
+    if (wx_obs_is_stale(&s)) {
         return;
     }
 
     cJSON *root = cJSON_CreateObject();
+    if (!root) return;
+    cJSON_AddNumberToObject(root, "obs_epoch", (double)s.obs_epoch);
+    cJSON_AddBoolToObject(root, "rain_partial", s.rain_totals_partial);
     cJSON_AddNumberToObject(root, "temperature", (double)cfg_temp(s.air_temp_c));
     cJSON_AddNumberToObject(root, "humidity", (double)s.humidity_pct);
     cJSON_AddNumberToObject(root, "dew_point", (double)cfg_temp(s.dew_point_c));
@@ -122,12 +125,12 @@ static void publish_state(void)
     cJSON_AddNumberToObject(root, "lightning_3h", s.strikes_3h);
     cJSON_AddNumberToObject(root, "battery_v", (double)s.battery_v);
     cJSON_AddNumberToObject(root, "hub_rssi", s.hub_rssi);
-    cJSON_AddBoolToObject(root, "indoor_valid", s.indoor_valid);
-    if (s.indoor_valid) {
+    cJSON_AddBoolToObject(root, "indoor_valid", !wx_indoor_is_stale(&s));
+    if (!wx_indoor_is_stale(&s)) {
         cJSON_AddNumberToObject(root, "indoor_temp", (double)cfg_temp(s.indoor_temp_c));
         cJSON_AddNumberToObject(root, "indoor_humidity", (double)s.indoor_humidity_pct);
     }
-    if (s.aqi_valid) {
+    if (!wx_aqi_is_stale(&s)) {
         cJSON_AddNumberToObject(root, "aqi", s.aqi_val);
     }
 
@@ -242,7 +245,7 @@ esp_err_t mqtt_app_start(void)
         return ESP_OK;
     }
     s_task_started = true;
-    if (xTaskCreate(mqtt_loop_task, "mqtt_task", 12 * 1024, NULL, 3,
+    if (xTaskCreate(mqtt_loop_task, "mqtt_task", 8 * 1024, NULL, 3,
                     &s_mqtt_task_handle) != pdPASS) {
         s_task_started = false;
         return ESP_ERR_NO_MEM;

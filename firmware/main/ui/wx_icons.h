@@ -36,5 +36,5 @@ bool wx_icon_set(lv_obj_t *icon, const char *slug);
 /* True when the slug means precipitation, for tinting the forecast column. */
 bool wx_icon_is_wet(const char *slug);
 
-/* Stop ThorVG while LIVE is covered. Hidden widgets still animate. */
+/* Pause drawing through visibility while retaining LVGL-owned animation state. */
 void wx_icon_set_paused(lv_obj_t *icon, bool paused);

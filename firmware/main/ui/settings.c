@@ -568,14 +568,7 @@ static void on_web_server_toggle(lv_event_t *e)
     cfg_get(&c);
     c.web_server_enabled = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
     cfg_set(&c);
-    if (c.web_server_enabled) {
-        web_server_start();
-    } else {
-        web_server_stop();
-#if CONFIG_OTA_ENABLED
-        ota_start();
-#endif
-    }
+    /* Main owns service start/stop; settings callbacks only change intent. */
 }
 
 static void on_mqtt_toggle(lv_event_t *e)
@@ -584,6 +577,9 @@ static void on_mqtt_toggle(lv_event_t *e)
     cfg_get(&c);
     c.mqtt_enabled = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
     cfg_set(&c);
+    if (c.mqtt_enabled) {
+        mqtt_app_start();
+    }
     mqtt_app_reconnect();
 }
 
@@ -1193,7 +1189,7 @@ esp_err_t settings_init(void)
     lv_obj_set_style_text_color(w_alert_body, COL_DIM, 0);
     lv_obj_set_width(w_alert_body, PANEL_W - 28);
     lv_label_set_long_mode(w_alert_body, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(w_alert_body, "No active NWS alert. Tap the ticker on any page to open Alerts.");
+    lv_label_set_text(w_alert_body, nws_alerts_is_current() ? "No active NWS alert. Tap the ticker to open Alerts." : "Waiting for a successful NWS update.");
     lv_obj_set_pos(w_alert_body, 0, 72);
 
     /* --- Display extras (right column) --- */
@@ -1404,10 +1400,10 @@ void settings_tick(void)
                          fc.radar[0] ? fc.radar : "--");
                 ui_label_set(w_alert_body, body);
             } else {
-                ui_label_set(w_alert_event, "All clear");
+                ui_label_set(w_alert_event, nws_alerts_is_current() ? "All clear" : "Alert updates unavailable");
                 lv_obj_set_style_text_color(w_alert_event, COL_DIM, 0);
                 ui_label_set(w_alert_body,
-                             "No active NWS alert. Tap the ticker on any page to open Alerts.");
+                             nws_alerts_is_current() ? "No active NWS alert. Tap the ticker to open Alerts." : "Waiting for a successful NWS update.");
             }
         }
     }
@@ -1528,7 +1524,7 @@ void settings_tick(void)
                 snprintf(nws_line, sizeof(nws_line), "%.80s  radar %.7s",
                          nfc.short_fc, nfc.radar[0] ? nfc.radar : "--");
             } else {
-                snprintf(nws_line, sizeof(nws_line), "All clear");
+                snprintf(nws_line, sizeof(nws_line), "%s", nws_alerts_is_current() ? "All clear" : "Updates unavailable");
             }
         }
         char fc_a[12];
@@ -1549,7 +1545,7 @@ void settings_tick(void)
             }
             char ota_url[72];
             if (net_get_ip(ip, sizeof(ip))) {
-                snprintf(ota_url, sizeof(ota_url), "http://%s:8080/ota", ip);
+                snprintf(ota_url, sizeof(ota_url), "http://%s:%d/ota", ip, web_server_is_running() ? 8080 : 80);
             } else {
                 snprintf(ota_url, sizeof(ota_url), "not available");
             }

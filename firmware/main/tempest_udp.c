@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <math.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -64,22 +65,23 @@ static void handle_obs_st(const cJSON *root)
     wx_state_t p = {0};
     p.obs_epoch               = (int64_t)arr_num(o, OBS_TIME, 0);
     p.wind_lull_ms            = (float)arr_num(o, OBS_WIND_LULL, 0);
-    p.wind_avg_ms             = (float)arr_num(o, OBS_WIND_AVG, 0);
-    p.wind_gust_ms            = (float)arr_num(o, OBS_WIND_GUST, 0);
+    p.wind_avg_ms             = (float)arr_num(o, OBS_WIND_AVG, NAN);
+    p.wind_gust_ms            = (float)arr_num(o, OBS_WIND_GUST, NAN);
     p.wind_dir_deg            = (int)arr_num(o, OBS_WIND_DIR, 0);
     p.wind_sample_interval_s  = (int)arr_num(o, OBS_WIND_INTERVAL, 3);
-    p.pressure_mb             = (float)arr_num(o, OBS_PRESSURE, 0);
-    p.air_temp_c              = (float)arr_num(o, OBS_TEMP, 0);
-    p.humidity_pct            = (float)arr_num(o, OBS_HUMIDITY, 0);
+    p.pressure_mb             = (float)arr_num(o, OBS_PRESSURE, NAN);
+    p.air_temp_c              = (float)arr_num(o, OBS_TEMP, NAN);
+    p.humidity_pct            = (float)arr_num(o, OBS_HUMIDITY, NAN);
     p.illuminance_lux         = (uint32_t)arr_num(o, OBS_ILLUMINANCE, 0);
     p.uv_index                = (float)arr_num(o, OBS_UV, 0);
     p.solar_radiation_wm2     = (float)arr_num(o, OBS_SOLAR, 0);
-    p.rain_last_min_mm        = (float)arr_num(o, OBS_RAIN, 0);
+    p.rain_last_min_mm        = (float)arr_num(o, OBS_RAIN, NAN);
     p.precip_type             = (wx_precip_type_t)(int)arr_num(o, OBS_PRECIP_TYPE, 0);
     p.lightning_avg_dist_km   = (float)arr_num(o, OBS_STRIKE_DIST, 0);
     p.lightning_count         = (int)arr_num(o, OBS_STRIKE_COUNT, 0);
     p.battery_v               = (float)arr_num(o, OBS_BATTERY, 0);
     p.report_interval_min     = (int)arr_num(o, OBS_REPORT_INTERVAL, 1);
+    if (!wx_obs_values_valid(&p)) return;
     wx_update_obs_st(&p);
 
     if (p.obs_epoch > 1700000000LL) {
@@ -151,29 +153,38 @@ static void handle_device_status(const cJSON *root)
                             (uint32_t)obj_int(root, "sensor_status", 0));
 }
 
-void tempest_ingest_message(const char *json, int len)
+bool tempest_ingest_message(const char *json, int len)
 {
     cJSON *root = cJSON_ParseWithLength(json, len);
     if (!root) {
         ESP_LOGD(TAG, "undecodable datagram (%d bytes)", len);
-        return;
+        return false;
     }
     const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
     if (!cJSON_IsString(type) || !type->valuestring) {
         cJSON_Delete(root);
-        return;
+        return false;
     }
 
     const char *t = type->valuestring;
+    const cJSON *serial = cJSON_GetObjectItemCaseSensitive(root, "serial_number");
+    const char *expected = strcmp(t, "hub_status") == 0
+        ? CONFIG_TEMPEST_HUB_SERIAL : CONFIG_TEMPEST_SENSOR_SERIAL;
+    /* Cloud frames omit serial_number; the subscription is device-specific. */
+    if (expected[0] && cJSON_IsString(serial) && strcmp(expected, serial->valuestring)) {
+        cJSON_Delete(root);
+        return false;
+    }
     if      (strcmp(t, "rapid_wind")    == 0) handle_rapid_wind(root);
     else if (strcmp(t, "obs_st")        == 0) handle_obs_st(root);
     else if (strcmp(t, "evt_strike")    == 0) handle_strike(root);
     else if (strcmp(t, "evt_precip")    == 0) handle_precip(root);
     else if (strcmp(t, "hub_status")    == 0) handle_hub_status(root);
     else if (strcmp(t, "device_status") == 0) handle_device_status(root);
-    else ESP_LOGD(TAG, "ignoring message type %s", t);
+    else { cJSON_Delete(root); return false; }
 
     cJSON_Delete(root);
+    return true;
 }
 
 static void udp_task(void *arg)
@@ -238,8 +249,7 @@ static void udp_task(void *arg)
             }
             buf[len] = '\0';
             s_packets++;
-            wx_note_udp_packet();
-            tempest_ingest_message(buf, len);
+            if (tempest_ingest_message(buf, len)) wx_note_udp_packet();
         }
 
         if (s_sock >= 0) {

@@ -16,16 +16,17 @@
 #include "esp_http_client.h"
 #include "esp_timer.h"
 #include <time.h>
+#include <math.h>
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "cJSON.h"
 
-#include "secrets.h"
+#include "credentials_config.h"
 
 static const char *TAG = "tempest_rest";
 
 #define RESP_MAX_BYTES   (192 * 1024)
-#define TASK_STACK       16384
+#define TASK_STACK       12288
 #define TASK_PRIO        4
 #define BACKOFF_S        1800
 
@@ -38,10 +39,10 @@ static const char *TAG = "tempest_rest";
 #define STATIONS_BUF_BYTES    (16 * 1024)
 
 #define STATIONS_URL_FMT \
-    "http://swd.weatherflow.com/swd/rest/stations/%d?token=%s"
+    "https://swd.weatherflow.com/swd/rest/stations/%d?token=%s"
 
 #define OBS_URL_FMT \
-    "http://swd.weatherflow.com/swd/rest/observations/" \
+    "https://swd.weatherflow.com/swd/rest/observations/" \
     "?device_id=%d&type=obs_st&time_start=%lld&time_end=%lld&token=%s"
 
 
@@ -91,7 +92,7 @@ static void copy_str(char *dst, size_t dstlen, const cJSON *obj, const char *key
 static double num_at(const cJSON *arr, int idx)
 {
     const cJSON *v = cJSON_GetArrayItem(arr, idx);
-    return cJSON_IsNumber(v) ? v->valuedouble : 0.0;
+    return cJSON_IsNumber(v) ? v->valuedouble : NAN;
 }
 
 static double num_or(const cJSON *obj, const char *key, double fallback)
@@ -158,12 +159,10 @@ static esp_err_t parse_forecast(const char *json, int len)
     }
 
     if (p.current_conditions[0] == '\0' && p.forecast[0].conditions[0]) {
-        strncpy(p.current_conditions, p.forecast[0].conditions,
-                sizeof(p.current_conditions) - 1);
+        snprintf(p.current_conditions, sizeof(p.current_conditions), "%.*s", (int)sizeof(p.current_conditions) - 1, p.forecast[0].conditions);
     }
     if (p.current_icon[0] == '\0' && p.forecast[0].icon[0]) {
-        strncpy(p.current_icon, p.forecast[0].icon,
-                sizeof(p.current_icon) - 1);
+        snprintf(p.current_icon, sizeof(p.current_icon), "%.*s", (int)sizeof(p.current_icon) - 1, p.forecast[0].icon);
     }
 
     wx_update_forecast(&p);
@@ -358,12 +357,12 @@ static esp_err_t fetch_open_meteo_forecast(const char *zipcode)
 
 static esp_err_t geocode_zip(const char *zipcode, float *out_lat, float *out_lon)
 {
-    if (!zipcode || strlen(zipcode) < 5 || !out_lat || !out_lon) {
+    if (!zipcode || strspn(zipcode, "0123456789") < 5 || !out_lat || !out_lon) {
         return ESP_FAIL;
     }
 
     char zip_url[128];
-    snprintf(zip_url, sizeof(zip_url), "http://api.zippopotam.us/us/%s", zipcode);
+    snprintf(zip_url, sizeof(zip_url), "http://api.zippopotam.us/us/%.5s", zipcode);
 
     char *resp_buf = malloc(4096);
     if (!resp_buf) {
@@ -430,8 +429,8 @@ static esp_err_t fetch_open_meteo_extras(const char *zipcode, float lat, float l
              "http://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
              "&timezone=auto&forecast_hours=24"
              "&hourly=temperature_2m,precipitation_probability"
-             "&daily=precipitation_sum,moonrise,moonset"
-             "&past_days=31&forecast_days=1",
+             "&daily=moonrise,moonset"
+             "&forecast_days=1",
              lat, lon);
 
     resp_accum_t acc = { .buf = resp_buf, .len = 0, .cap = 96 * 1024 };
@@ -510,31 +509,8 @@ static esp_err_t fetch_open_meteo_extras(const char *zipcode, float lat, float l
     /* Rain totals + moon schedule from daily block */
     cJSON *daily = cJSON_GetObjectItemCaseSensitive(root, "daily");
     if (cJSON_IsObject(daily)) {
-        cJSON *precip = cJSON_GetObjectItemCaseSensitive(daily, "precipitation_sum");
         cJSON *mr_arr = cJSON_GetObjectItemCaseSensitive(daily, "moonrise");
         cJSON *ms_arr = cJSON_GetObjectItemCaseSensitive(daily, "moonset");
-
-        if (cJSON_IsArray(precip)) {
-            int days = cJSON_GetArraySize(precip);
-            float sum7 = 0.0f;
-            float sum_month = 0.0f;
-            int start7 = days > 7 ? days - 7 : 0;
-            for (int i = start7; i < days; i++) {
-                cJSON *v = cJSON_GetArrayItem(precip, i);
-                if (cJSON_IsNumber(v)) {
-                    sum7 += (float)v->valuedouble;
-                }
-            }
-            for (int i = 0; i < days; i++) {
-                cJSON *v = cJSON_GetArrayItem(precip, i);
-                if (cJSON_IsNumber(v)) {
-                    sum_month += (float)v->valuedouble;
-                }
-            }
-            /* Open-Meteo only gives a month window here. Passing that as
-             * YTD would overwrite the on-device year accumulator. */
-            wx_update_rain_totals(sum7, sum_month, 0);
-        }
 
         if (cJSON_IsArray(mr_arr) && cJSON_GetArraySize(mr_arr) > 0) {
             /* Open-Meteo daily arrays: index 0 is today, index 1 is tomorrow */
@@ -767,7 +743,16 @@ static int seed_window(const char *json, int len)
         if (!cJSON_IsArray(row) || cJSON_GetArraySize(row) < 18) {
             continue;
         }
-        history_add((int64_t)num_at(row, 0),
+        double epoch = num_at(row, 0);
+        if (!isfinite(epoch)) continue;
+        wx_state_t check = {
+            .obs_epoch = (int64_t)epoch, .air_temp_c = num_at(row, 7),
+            .humidity_pct = num_at(row, 8), .pressure_mb = num_at(row, 6),
+            .wind_avg_ms = num_at(row, 2), .wind_gust_ms = num_at(row, 3),
+            .rain_last_min_mm = num_at(row, 12),
+        };
+        if (!wx_obs_values_valid(&check)) continue;
+        history_add_backfill((int64_t)num_at(row, 0),
                     (float)num_at(row, 7),     /* air temp  */
                     (float)num_at(row, 8),     /* humidity  */
                     (float)num_at(row, 6),     /* pressure  */
@@ -793,8 +778,6 @@ esp_err_t tempest_rest_backfill_history(void)
         return ESP_FAIL;
     }
 
-    history_begin_backfill();
-
     char *url = malloc(512);
     char *buf = heap_caps_malloc(BACKFILL_BUF_BYTES, MALLOC_CAP_SPIRAM);
     if (!url || !buf) {
@@ -804,6 +787,12 @@ esp_err_t tempest_rest_backfill_history(void)
         return ESP_ERR_NO_MEM;
     }
 
+    if (history_begin_backfill() != ESP_OK) {
+        free(url);
+        free(buf);
+        display_https_end();
+        return ESP_ERR_NO_MEM;
+    }
     int64_t now = (int64_t)time(NULL);
     int total = 0;
 
@@ -898,7 +887,7 @@ static void rest_task(void *arg)
 
 void tempest_rest_on_clock_sync(void)
 {
-    try_history_backfill();
+    /* The REST task waits for a plausible clock and owns backfill. */
 }
 
 esp_err_t tempest_rest_start(void)

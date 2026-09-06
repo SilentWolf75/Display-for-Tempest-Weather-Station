@@ -241,6 +241,14 @@ void alerts_tick(void)
         lv_obj_set_style_text_color(s_instruction, COL_TEXT, 0);
         ui_label_set(s_subtitle, "Active NWS alert");
         lv_obj_set_style_text_color(s_subtitle, COL_RED, 0);
+    } else if (!nws_alerts_is_current()) {
+        lv_obj_set_style_bg_color(lv_obj_get_child(s_nws_card, 0), COL_AMBER, 0);
+        ui_label_set(s_event, "Alert updates unavailable");
+        lv_obj_set_style_text_color(s_event, COL_AMBER, 0);
+        ui_label_set(s_meta, "Waiting for a successful NWS update");
+        ui_label_set(s_headline, "Current watches and warnings could not be confirmed.");
+        ui_label_set(s_instruction, "Check your network connection and local weather reports.");
+        ui_label_set(s_subtitle, "National Weather Service");
     } else {
         lv_obj_set_style_bg_color(lv_obj_get_child(s_nws_card, 0), COL_OK, 0);
         nws_forecast_t fc = {0};

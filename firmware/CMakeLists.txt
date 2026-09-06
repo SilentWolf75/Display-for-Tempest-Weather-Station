@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 # ESP32-P4 only. The board has no other target.
 set(COMPONENTS main)
-set(PROJECT_VER "1.0.0")
+set(PROJECT_VER "1.0.1")
+option(TEMPEST_PUBLIC_RELEASE "Build without local Wi-Fi or Tempest credentials" OFF)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(tempest_display)

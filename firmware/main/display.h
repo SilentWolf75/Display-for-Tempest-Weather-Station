@@ -33,23 +33,30 @@ uint8_t display_get_brightness(void);
 /* Invalidate the active screen and poke the LVGL task to flush now. */
 void display_refresh_now(void);
 
-/* Thread-safe. After a burst of SDIO traffic (HTTPS forecast, C6 Wi-Fi)
- * the MIPI path can drop while the backlight stays on. Re-assert PWM and
- * ask the LVGL task to wake the panel and repaint. `reason` must be a
- * literal — it is only logged. */
+/* Thread-safe: queue a boot repaint or an indoor I2C reset. Ordinary
+ * network completion does not require a display reset. reason is a literal. */
 void display_recover_after_sdio(const char *reason);
 
-/* LVGL-thread only (lock already held). Returns true if a recover was
- * pending; caller should invalidate the active screen. */
+/* LVGL-thread only (lock already held). Returns true only when a repaint
+ * was requested; an I2C-only reset does not invalidate the screen. */
 bool display_apply_recover_request(void);
 
-/* Indoor I2C stands down while HTTPS is on the C6 SDIO link. Nested. */
+/* One TLS session at a time (recursive on the same task). Indoor I2C
+ * and Lottie stand down while busy. */
 void display_https_begin(void);
 void display_https_end(void);
 bool display_https_busy(void);
+
+/* GT911 shares I2C with the indoor sensor. After a long run the bus can
+ * wedge; LVGL already skips the failed poll. This counts failures and
+ * queues an I2C-only recover on the LVGL thread. */
+void display_note_touch_io(esp_err_t err);
 
 /* The I2C bus the touch controller sits on. Shared with the Grove header,
  * so the indoor sensor attaches to this rather than creating a second
  * master on the same two pins. NULL if display_init() has not run or the
  * bus could not be created. */
 i2c_master_bus_handle_t display_get_i2c_bus(void);
+
+/* Log render progress, LVGL lock responsiveness and internal heap margins. */
+void display_log_health(void);

@@ -115,6 +115,7 @@ typedef struct {
     float    rain_month_mm;
     float    rain_ytd_mm;
     float    rain_rate_mm_hr;
+    bool     rain_totals_partial;
 
     /* Observed extremes since local midnight -- what actually happened, as
      * opposed to what the forecast predicted. */
@@ -168,6 +169,7 @@ typedef struct {
     char     aqi_category[24];
     float    aqi_pm25;
     bool     aqi_valid;
+    int64_t  aqi_fetched_epoch;
 
     /* Geocoded from the settings zip. Used for moon altitude and NWS/AQI. */
     float    station_lat;
@@ -191,7 +193,8 @@ void wx_update_hub_status(int rssi, uint32_t uptime_s);
 void wx_update_device_status(int rssi, float voltage, uint32_t sensor_status);
 void wx_update_forecast(const wx_state_t *partial);
 void wx_update_hourly(const wx_hourly_slot_t *slots, int count);
-void wx_update_rain_totals(float mm_7d, float mm_month, float mm_ytd);
+void wx_daily_checkpoint(void);
+bool wx_obs_values_valid(const wx_state_t *p);
 void wx_update_moon_schedule(int64_t rise, int64_t set);
 void wx_update_indoor(const wx_state_t *partial);
 void wx_update_aqi(int aqi_val, const char *cat, float pm25);
@@ -211,6 +214,8 @@ bool wx_forecast_is_stale(const wx_state_t *s);
 /* True if the indoor reading is older than CONFIG_INDOOR_STALE_S. Separate
  * from wx_obs_is_stale because the two feeds fail independently. */
 bool wx_indoor_is_stale(const wx_state_t *s);
+bool wx_aqi_is_stale(const wx_state_t *s);
+bool wx_hourly_is_stale(const wx_state_t *s);
 
 /* ---- pure helpers, no locking, safe anywhere ---- */
 float wx_dew_point_c(float temp_c, float humidity_pct);

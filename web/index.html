@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tempest Weather Display — Install</title>
+  <title>Display for Tempest Weather Station — Install</title>
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
   <style>
     :root {
@@ -46,14 +46,14 @@
 <body>
   <main>
     <h1>Display for Tempest Weather Station</h1>
-    <p class="sub">Elecrow CrowPanel Advance 10.1&quot; (ESP32-P4) &mdash; version 1.0.0</p>
+    <p class="sub">Elecrow CrowPanel Advance 10.1&quot; (ESP32-P4) &mdash; version 1.0.1</p>
 
     <div class="card">
       <h2>First install (USB)</h2>
       <p>Chrome or Edge, USB cable, <strong>5 V / 2 A</strong> supply (PC USB ports brown out this panel).</p>
       <ol>
         <li>Download <code>merged-firmware.bin</code> from the
-          <a href="https://github.com/SilentWolf75/tempest-weather-display/releases/latest">latest release</a>.</li>
+          <a href="https://github.com/SilentWolf75/Display-for-Tempest-Weather-Station/releases/latest">latest release</a>.</li>
         <li>Choose that file here, then click Connect.</li>
       </ol>
       <p>
@@ -91,8 +91,8 @@
       if (manUrl) URL.revokeObjectURL(manUrl);
       binUrl = URL.createObjectURL(file);
       const manifest = {
-        name: "Tempest Weather Display",
-        version: "1.0.0",
+        name: "Display for Tempest Weather Station",
+        version: "1.0.1",
         new_install_prompt_erase: true,
         builds: [{
           chipFamily: "ESP32-P4",
