@@ -1,5 +1,9 @@
+#include <stdio.h>
 #include "wx_state.h"
 #include "history.h"
+#include "wx_daily.h"
+#include "nvs.h"
+#include "esp_timer.h"
 #include "wx_astronomy.h"
 
 #include <math.h>
@@ -16,6 +20,9 @@ void ui_notify_forecast_updated(void);
 
 static wx_state_t        s_state;
 static SemaphoreHandle_t s_lock;
+static wx_daily_t s_daily;
+static int64_t s_last_checkpoint_us;
+static int64_t s_saved_epoch;
 
 #define LOCK()    xSemaphoreTake(s_lock, portMAX_DELAY)
 #define UNLOCK()  xSemaphoreGive(s_lock)
@@ -28,6 +35,16 @@ esp_err_t wx_state_init(void)
         return ESP_ERR_NO_MEM;
     }
     memset(&s_state, 0, sizeof(s_state));
+    nvs_handle_t h;
+    if (nvs_open("wx_daily", NVS_READONLY, &h) == ESP_OK) {
+        size_t len = sizeof(s_daily);
+        if (nvs_get_blob(h, "totals", &s_daily, &len) != ESP_OK ||
+            len != sizeof(s_daily) || s_daily.version != 1) {
+            memset(&s_daily, 0, sizeof(s_daily));
+        }
+        nvs_close(h);
+    }
+    s_saved_epoch = s_daily.last_epoch;
     return ESP_OK;
 }
 
@@ -35,6 +52,8 @@ void wx_snapshot(wx_state_t *out)
 {
     LOCK();
     memcpy(out, &s_state, sizeof(*out));
+    wx_daily_project(&s_daily, (int64_t)time(NULL), out);
+    if (wx_hourly_is_stale(out)) out->hourly_valid = false;
     UNLOCK();
 }
 
@@ -60,46 +79,37 @@ static int64_t s_strikes[STRIKE_HISTORY];
 static int  s_strike_head;
 static int  s_strike_count;
 
-static int  s_current_yday = -1;
-static int  s_current_mon  = -1;
-static int  s_current_year = -1;
-
-/* Local midnight, not UTC: "rain today" has to mean the user's today. */
-static void roll_day_if_needed(int64_t epoch)
+/* Checkpoint at most every five minutes. A sudden power loss may lose the
+ * uncheckpointed tail; totals remain explicitly partial. Called by main only. */
+void wx_daily_checkpoint(void)
 {
-    if (epoch < 1600000000LL) {
-        return;             /* clock not set; see wx_obs_is_stale */
+    int64_t now = esp_timer_get_time();
+    if (now - s_last_checkpoint_us < 300000000LL) return;
+    wx_daily_t saved;
+    LOCK();
+    saved = s_daily;
+    UNLOCK();
+    if (!saved.last_epoch || saved.last_epoch == s_saved_epoch) return;
+    nvs_handle_t h;
+    if (nvs_open("wx_daily", NVS_READWRITE, &h) != ESP_OK) return;
+    esp_err_t err = nvs_set_blob(h, "totals", &saved, sizeof(saved));
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    if (err == ESP_OK) {
+        s_saved_epoch = saved.last_epoch;
+        s_last_checkpoint_us = now;
     }
-    time_t t = (time_t)epoch;
-    struct tm lt;
-    localtime_r(&t, &lt);
+}
 
-    if (s_current_yday == lt.tm_yday) {
-        return;
-    }
-    if (s_current_yday != -1) {
-        float finished = s_state.rain_today_mm;
-        ESP_LOGI(TAG, "local midnight: resetting daily accumulators");
-        s_state.rain_7d_mm    += finished;
-        s_state.rain_month_mm += finished;
-        s_state.rain_ytd_mm   += finished;
-    }
-    s_current_yday            = lt.tm_yday;
-    s_state.rain_today_mm     = 0.0f;
-    s_state.temp_high_today_c = 0.0f;
-    s_state.temp_low_today_c  = 0.0f;
-    s_state.daily_valid       = false;
-
-    if (s_current_mon != lt.tm_mon || s_current_year != lt.tm_year) {
-        if (s_current_mon != -1 && s_current_mon != lt.tm_mon) {
-            s_state.rain_month_mm = 0.0f;
-        }
-        if (s_current_year != -1 && s_current_year != lt.tm_year) {
-            s_state.rain_ytd_mm = 0.0f;
-        }
-        s_current_mon  = lt.tm_mon;
-        s_current_year = lt.tm_year;
-    }
+bool wx_obs_values_valid(const wx_state_t *p)
+{
+    return p && p->obs_epoch >= 1600000000LL &&
+        isfinite(p->air_temp_c) && p->air_temp_c >= -100 && p->air_temp_c <= 70 &&
+        isfinite(p->humidity_pct) && p->humidity_pct >= 0 && p->humidity_pct <= 100 &&
+        isfinite(p->pressure_mb) && p->pressure_mb >= 300 && p->pressure_mb <= 1200 &&
+        isfinite(p->wind_avg_ms) && p->wind_avg_ms >= 0 && p->wind_avg_ms <= 150 &&
+        isfinite(p->wind_gust_ms) && p->wind_gust_ms >= 0 && p->wind_gust_ms <= 150 &&
+        isfinite(p->rain_last_min_mm) && p->rain_last_min_mm >= 0;
 }
 
 static void push_pressure(int64_t epoch, float mb)
@@ -124,7 +134,7 @@ static bool compute_trend(int64_t now, float current_mb, float *delta_out)
     for (int i = 0; i < s_pressure_count; i++) {
         const pressure_sample_t *sm = &s_pressure[i];
         int64_t age = now - sm->epoch;
-        if (age >= TREND_WINDOW_S && age > best_age) {
+        if (age >= TREND_WINDOW_S && (!found || age < best_age)) {
             best_age = age;
             best_mb  = sm->mb;
             found    = true;
@@ -150,7 +160,7 @@ static int count_recent_strikes(int64_t now)
 {
     int n = 0;
     for (int i = 0; i < s_strike_count; i++) {
-        if (now - s_strikes[i] <= TREND_WINDOW_S) {
+        if (now >= s_strikes[i] && now - s_strikes[i] <= TREND_WINDOW_S) {
             n++;
         }
     }
@@ -159,7 +169,9 @@ static int count_recent_strikes(int64_t now)
 
 void wx_update_obs_st(const wx_state_t *p)
 {
+    if (!wx_obs_values_valid(p)) return;
     LOCK();
+    if (p->obs_epoch <= s_state.obs_epoch) { UNLOCK(); return; }
     s_state.obs_epoch             = p->obs_epoch;
     s_state.wind_lull_ms          = p->wind_lull_ms;
     s_state.wind_avg_ms           = p->wind_avg_ms;
@@ -206,45 +218,12 @@ void wx_update_obs_st(const wx_state_t *p)
     wx_moon_info_t moon;
     wx_moon_compute(p->obs_epoch, &moon);
     s_state.moon_illumination = moon.illumination;
-    strncpy(s_state.moon_phase_name, moon.phase_name,
-            sizeof(s_state.moon_phase_name) - 1);
-    strncpy(s_state.moon_icon, moon.icon_slug, sizeof(s_state.moon_icon) - 1);
+    snprintf(s_state.moon_phase_name, sizeof(s_state.moon_phase_name), "%.*s", (int)sizeof(s_state.moon_phase_name) - 1, moon.phase_name);
+    snprintf(s_state.moon_icon, sizeof(s_state.moon_icon), "%.*s", (int)sizeof(s_state.moon_icon) - 1, moon.icon_slug);
 
-    roll_day_if_needed(p->obs_epoch);
-
-    /* Rain arrives as "millimetres in the previous PREVIOUS MINUTE", so this
-     * sum is only complete while the station reports once a minute -- which is
-     * what report_interval says for station 230728. If the interval is ever
-     * raised, each report still describes only one minute and the other
-     * minutes are simply not transmitted, so the daily total would undercount.
-     * Warn rather than silently scaling, because scaling would be inventing
-     * rain that was never measured. */
-    if (p->report_interval_min > 1) {
-        static bool warned;
-        if (!warned) {
-            ESP_LOGW(TAG, "report interval is %d min; obs_st only carries the",
-                     p->report_interval_min);
-            ESP_LOGW(TAG, "previous MINUTE of rain, so the daily total will");
-            ESP_LOGW(TAG, "undercount. Set the station back to 1-minute"
-                          " reporting.");
-            warned = true;
-        }
-    }
-    s_state.rain_today_mm  += p->rain_last_min_mm;
+    wx_daily_add(&s_daily, p);
+    wx_daily_project(&s_daily, p->obs_epoch, &s_state);
     s_state.rain_rate_mm_hr = p->rain_last_min_mm * 60.0f;
-
-    if (!s_state.daily_valid) {
-        s_state.temp_high_today_c = p->air_temp_c;
-        s_state.temp_low_today_c  = p->air_temp_c;
-        s_state.daily_valid       = true;
-    } else {
-        if (p->air_temp_c > s_state.temp_high_today_c) {
-            s_state.temp_high_today_c = p->air_temp_c;
-        }
-        if (p->air_temp_c < s_state.temp_low_today_c) {
-            s_state.temp_low_today_c = p->air_temp_c;
-        }
-    }
 
     push_pressure(p->obs_epoch, p->pressure_mb);
     float delta = 0.0f;
@@ -266,7 +245,9 @@ void wx_update_obs_st(const wx_state_t *p)
 
 void wx_update_rapid_wind(int64_t epoch, float speed_ms, int dir_deg)
 {
+    if (epoch < 1600000000LL || !isfinite(speed_ms) || speed_ms < 0 || speed_ms > 150) return;
     LOCK();
+    if (epoch <= s_state.rapid_epoch) { UNLOCK(); return; }
     s_state.rapid_epoch        = epoch;
     s_state.rapid_wind_ms      = speed_ms;
     s_state.rapid_wind_dir_deg = dir_deg;
@@ -277,6 +258,7 @@ void wx_update_rapid_wind(int64_t epoch, float speed_ms, int dir_deg)
 void wx_update_strike(int64_t epoch, float dist_km, uint32_t energy)
 {
     LOCK();
+    if (epoch <= s_state.last_strike_epoch) { UNLOCK(); return; }
     s_state.last_strike_epoch   = epoch;
     s_state.last_strike_dist_km = dist_km;
     s_state.last_strike_energy  = energy;
@@ -346,21 +328,6 @@ void wx_update_hourly(const wx_hourly_slot_t *slots, int count)
     s_state.hourly_count          = count;
     s_state.hourly_fetched_epoch  = (int64_t)time(NULL);
     s_state.hourly_valid          = true;
-    UNLOCK();
-}
-
-void wx_update_rain_totals(float mm_7d, float mm_month, float mm_ytd)
-{
-    LOCK();
-    if (mm_7d > 0.0f) {
-        s_state.rain_7d_mm = mm_7d;
-    }
-    if (mm_month > 0.0f) {
-        s_state.rain_month_mm = mm_month;
-    }
-    if (mm_ytd > 0.0f) {
-        s_state.rain_ytd_mm = mm_ytd;
-    }
     UNLOCK();
 }
 
@@ -631,7 +598,8 @@ void wx_update_aqi(int aqi_val, const char *cat, float pm25)
         strncpy(s_state.aqi_category, cat, sizeof(s_state.aqi_category) - 1);
         s_state.aqi_category[sizeof(s_state.aqi_category) - 1] = '\0';
     }
-    s_state.aqi_valid = (aqi_val > 0);
+    s_state.aqi_valid = (aqi_val >= 0);
+    s_state.aqi_fetched_epoch = (int64_t)time(NULL);
     UNLOCK();
 }
 
@@ -642,4 +610,15 @@ void wx_update_station_location(float lat, float lon)
     s_state.station_lon = lon;
     s_state.station_loc_valid = !(lat == 0.0f && lon == 0.0f);
     UNLOCK();
+}
+
+bool wx_aqi_is_stale(const wx_state_t *s)
+{
+    return !s->aqi_valid || (time(NULL) >= 1600000000LL &&
+           (int64_t)time(NULL) - s->aqi_fetched_epoch > 7200);
+}
+bool wx_hourly_is_stale(const wx_state_t *s)
+{
+    return !s->hourly_valid || (time(NULL) >= 1600000000LL &&
+           (int64_t)time(NULL) - s->hourly_fetched_epoch > 43200);
 }

@@ -935,20 +935,22 @@ esp_err_t page2_init(void)
     lv_label_set_text(title, "Sky");
     lv_obj_set_pos(title, 16, 6);
 
-    /* Date only -- Montserrat has no em-dash, so "Today -- Sunday" painted a
-     * missing-glyph box between the two words. */
+    /* Bound alerts to their own row so long event names cannot overlap
+     * conditions or the clock. Scroll instead of hiding the warning tail. */
     s_subtitle = lv_label_create(s_screen);
     lv_obj_set_style_text_font(s_subtitle, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_subtitle, COL_DIM, 0);
     lv_label_set_text(s_subtitle, "--");
-    lv_obj_set_pos(s_subtitle, 80, 12);
+    lv_obj_set_pos(s_subtitle, 80, 7);
+    lv_obj_set_size(s_subtitle, 620, 18);
+    lv_label_set_long_mode(s_subtitle, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
     s_now_lbl = lv_label_create(s_screen);
     lv_obj_set_style_text_font(s_now_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_now_lbl, COL_MOON_TITLE, 0);
     lv_label_set_text(s_now_lbl, "");
-    lv_obj_set_pos(s_now_lbl, 300, 12);
-    lv_obj_set_width(s_now_lbl, 240);
+    lv_obj_set_pos(s_now_lbl, 80, 29);
+    lv_obj_set_size(s_now_lbl, 620, 18);
     lv_label_set_long_mode(s_now_lbl, LV_LABEL_LONG_DOT);
 
     s_clock = lv_label_create(s_screen);
@@ -1072,7 +1074,7 @@ void page2_tick(void)
         lv_label_set_text(s_now_lbl, "");
     }
 
-    if (s.aqi_valid && s.aqi_val > 0) {
+    if (!wx_aqi_is_stale(&s)) {
         if (s.aqi_pm25 > 0.0f) {
             set_text(s_ins_aqi, "%d  %s  PM2.5 %.0f",
                      s.aqi_val, wx_aqi_epa_label(s.aqi_val), (double)s.aqi_pm25);

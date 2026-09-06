@@ -244,6 +244,13 @@ static void redraw_panel(panel_t *p)
     int have = history_get(p->series, s_scratch, POINTS, &lo_si, &hi_si);
 
     if (have < 2) {
+        int32_t *y = lv_chart_get_y_array(p->chart, p->primary);
+        for (int i = 0; i < POINTS; i++) y[i] = LV_CHART_POINT_NONE;
+        if (p->secondary) {
+            y = lv_chart_get_y_array(p->chart, p->secondary);
+            for (int i = 0; i < POINTS; i++) y[i] = LV_CHART_POINT_NONE;
+        }
+        lv_chart_refresh(p->chart);
         ui_label_set(p->readout, "--");
         ui_label_set(p->range, "collecting...");
         return;
@@ -355,7 +362,7 @@ void graphs_tick(void)
         ui_label_set(s_span_label,
                      "history fills over the first 24 hours after boot");
         for (int i = 0; i < GRAPH_PANELS; i++) {
-            ui_label_set(s_panels[i].range, "collecting...");
+            redraw_panel(&s_panels[i]);
         }
         return;
     }

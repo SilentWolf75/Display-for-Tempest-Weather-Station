@@ -25,6 +25,7 @@ typedef struct {
         float x;
         float y;
     } scale;                            /* Touch scale */
+    void (*io_result)(esp_err_t err);
 } lvgl_port_touch_ctx_t;
 
 /*******************************************************************************
@@ -55,6 +56,7 @@ lv_indev_t *lvgl_port_add_touch(const lvgl_port_touch_cfg_t *touch_cfg)
     touch_ctx->handle = touch_cfg->handle;
     touch_ctx->scale.x = (touch_cfg->scale.x ? touch_cfg->scale.x : 1);
     touch_ctx->scale.y = (touch_cfg->scale.y ? touch_cfg->scale.y : 1);
+    touch_ctx->io_result = touch_cfg->io_result;
 
     if (touch_ctx->handle->config.int_gpio_num != GPIO_NUM_NC) {
         /* Register touch interrupt callback */
@@ -137,9 +139,15 @@ static void lvgl_port_touchpad_read(lv_indev_t *indev_drv, lv_indev_data_t *data
      * not kill the firmware. Report no touch and let the next poll try again;
      * at the LVGL refresh rate the user cannot perceive a skipped sample. */
     esp_err_t tp_err = esp_lcd_touch_read_data(touch_ctx->handle);
+    if (touch_ctx->io_result) {
+        touch_ctx->io_result(tp_err);
+    }
     if (tp_err != ESP_OK) {
-        ESP_LOGW(TAG, "touch read failed (%s); skipping this poll",
-                 esp_err_to_name(tp_err));
+        static int s_fail_log;
+        if ((s_fail_log++ % 100) == 0) {
+            ESP_LOGW(TAG, "touch read failed (%s); skipping this poll",
+                     esp_err_to_name(tp_err));
+        }
         data->state = LV_INDEV_STATE_RELEASED;
         return;
     }
@@ -147,8 +155,14 @@ static void lvgl_port_touchpad_read(lv_indev_t *indev_drv, lv_indev_data_t *data
     tp_err = esp_lcd_touch_get_data(touch_ctx->handle, touch_data, &touch_cnt,
                                     CONFIG_ESP_LCD_TOUCH_MAX_POINTS);
     if (tp_err != ESP_OK) {
-        ESP_LOGW(TAG, "touch get_data failed (%s); skipping this poll",
-                 esp_err_to_name(tp_err));
+        if (touch_ctx->io_result) {
+            touch_ctx->io_result(tp_err);
+        }
+        static int s_get_fail_log;
+        if ((s_get_fail_log++ % 100) == 0) {
+            ESP_LOGW(TAG, "touch get_data failed (%s); skipping this poll",
+                     esp_err_to_name(tp_err));
+        }
         data->state = LV_INDEV_STATE_RELEASED;
         return;
     }

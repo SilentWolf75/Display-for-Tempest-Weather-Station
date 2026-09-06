@@ -152,18 +152,19 @@ static const char HTML_PAGE[] =
 "document.getElementById('trend').innerText='Trend: '+(d.trend_str||'Steady');"
 "document.getElementById('rain').innerText=t(n(d.rain_today,2),uR);"
 "document.getElementById('rain_rate').innerText='Rate: '+t(n(d.rain_rate,2),uR+'/hr');"
-"document.getElementById('rain_next').innerText=d.next_rain||'No rain expected';"
+"document.getElementById('rain_next').innerText='Observed total (partial)';"
 "document.getElementById('strikes').innerText=d.strikes_3h!=null?d.strikes_3h:'--';"
 "document.getElementById('strike_dist').innerText=d.last_strike||'No strikes in 3 hrs';"
 "document.getElementById('solar').innerText=t(n(d.solar_wm2,0),' W/m²');"
 "document.getElementById('uv').innerText='UV Index: '+t(n(d.uv,1),'');"
-"document.getElementById('aqi').innerText=d.aqi>0?d.aqi:'--';"
+"document.getElementById('aqi').innerText=d.aqi>=0?d.aqi:'--';"
 "document.getElementById('aqi_cat').innerText=d.aqi_cat||'EPA Index';"
 "document.getElementById('battery').innerText=t(n(d.battery_v,2),' V');"
 "document.getElementById('hub_rssi').innerText='Hub RSSI: '+(d.hub_rssi!=null?d.hub_rssi:'--')+' dBm';"
 "let st=document.getElementById('station_status');"
 "if(!d.wifi_connected){st.innerText='● No Wi-Fi';st.style.color='var(--alert)';}"
 "else if(!d.obs_valid){st.innerText='● Waiting for station';st.style.color='var(--warn)';}"
+"else if(d.obs_stale){st.innerText='Stale data';st.style.color='var(--warn)';}"
 "else if(d.ws_fallback){st.innerText='● WebSocket fallback';st.style.color='var(--warn)';}"
 "else if(d.udp_stale){st.innerText='● No UDP';st.style.color='var(--warn)';}"
 "else if(d.obs_stale){st.innerText='● Stale data';st.style.color='var(--warn)';}"
@@ -173,11 +174,11 @@ static const char HTML_PAGE[] =
 "document.getElementById('indoor_hum').innerText='Humidity '+t(n(d.indoor_humidity,0),'%');"
 "}else{"
 "document.getElementById('indoor_temp').innerText='--°';"
-"document.getElementById('indoor_hum').innerText='No Grove sensor';"
+"document.getElementById('indoor_hum').innerText='Indoor data unavailable';"
 "}"
 "let ab=document.getElementById('alert_banner');"
 "if(d.nws_alert){ab.style.display='block';ab.innerText='Warning: '+d.nws_alert;"
-"ab.style.background=d.nws_severe?'#7f1d1d':'#78350f';}else{ab.style.display='none';}"
+"ab.style.background=d.nws_severe?'#7f1d1d':'#78350f';}else if(!d.nws_current){ab.style.display='block';ab.innerText='NWS alert updates unavailable';ab.style.background='#78350f';}else{ab.style.display='none';}"
 "let fr=document.getElementById('forecast_row');fr.replaceChildren();"
 "if(Array.isArray(d.daily)){d.daily.forEach(function(x,i){"
 "let el=document.createElement('div');el.className='fc-day';"
@@ -205,13 +206,10 @@ static const char HTML_PAGE[] =
 "let mn=Math.min.apply(null,pts),mx=Math.max.apply(null,pts),pad=4;"
 "if(mx===mn){mx=mn+1;}"
 "ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();"
-"if(pts.length===1){"
-"let y=c.height-pad-((pts[0]-mn)/(mx-mn||1))*(c.height-2*pad);"
-"ctx.moveTo(pad,y);ctx.lineTo(c.width-pad,y);ctx.stroke();return;}"
-"let j=0;for(let i=0;i<data.length;i++){if(data[i]==null)continue;"
-"let x=pad+(j/(pts.length-1))*(c.width-2*pad);"
+"let pen=false;for(let i=0;i<data.length;i++){if(data[i]==null){pen=false;continue;}"
+"let x=pad+(i/Math.max(1,data.length-1))*(c.width-2*pad);"
 "let y=c.height-pad-((data[i]-mn)/(mx-mn||1))*(c.height-2*pad);"
-"if(j===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);j++;}ctx.stroke();}"
+"if(!pen)ctx.moveTo(x,y);else ctx.lineTo(x,y);pen=true;}ctx.stroke();}"
 "async function updateHistory(){"
 "try{let r=await fetch('/api/history');if(!r.ok)return;let h=await r.json();"
 "drawChart('chart_temp',h.temp,'#38bdf8');"
@@ -334,7 +332,7 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     }
 
     cJSON *hr_arr = cJSON_AddArrayToObject(root, "hourly");
-    if (hr_arr && s.hourly_valid) {
+    if (hr_arr && !wx_hourly_is_stale(&s)) {
         int hn = s.hourly_count;
         if (hn > 12) {
             hn = 12;
@@ -359,14 +357,20 @@ static esp_err_t api_status_handler(httpd_req_t *req)
             cJSON_AddItemToArray(hr_arr, h);
         }
     }
-    cJSON_AddNumberToObject(root, "aqi", s.aqi_valid ? s.aqi_val : 0);
-    cJSON_AddStringToObject(root, "aqi_cat", s.aqi_valid ? s.aqi_category : "Unknown");
-    cJSON_AddBoolToObject(root, "indoor_valid", s.indoor_valid);
-    if (s.indoor_valid) {
+    cJSON_AddNumberToObject(root, "aqi", !wx_aqi_is_stale(&s) ? s.aqi_val : -1);
+    cJSON_AddStringToObject(root, "aqi_cat", !wx_aqi_is_stale(&s) ? s.aqi_category : "Unavailable");
+    cJSON_AddBoolToObject(root, "indoor_valid", !wx_indoor_is_stale(&s));
+    if (!wx_indoor_is_stale(&s)) {
         cJSON_AddNumberToObject(root, "indoor_temp", (double)cfg_temp(s.indoor_temp_c));
         cJSON_AddNumberToObject(root, "indoor_humidity", (double)s.indoor_humidity_pct);
     }
 
+    cJSON_AddBoolToObject(root, "nws_current", nws_alerts_is_current());
+    cJSON_AddNumberToObject(root, "obs_epoch", (double)s.obs_epoch);
+    cJSON_AddNumberToObject(root, "aqi_epoch", (double)s.aqi_fetched_epoch);
+    cJSON_AddNumberToObject(root, "indoor_epoch", (double)s.indoor_fetched_epoch);
+    cJSON_AddBoolToObject(root, "rain_partial", s.rain_totals_partial);
+    cJSON_AddStringToObject(root, "rain_source", "station observations");
     nws_alert_t alert = {0};
     if (nws_alerts_get_active(&alert)) {
         cJSON_AddStringToObject(root, "nws_alert", alert.event);
@@ -418,13 +422,12 @@ static void history_add_series(cJSON *root, const char *key,
                                hist_series_t series, float (*conv)(float))
 {
     static float buf[HIST_BUCKETS];
-    int n = history_get(series, buf, HIST_BUCKETS, NULL, NULL);
+    history_get(series, buf, HIST_BUCKETS, NULL, NULL);
     cJSON *arr = cJSON_AddArrayToObject(root, key);
     if (!arr) {
         return;
     }
-    int step = (n > 48) ? 3 : 1;
-    for (int i = 0; i < n; i += step) {
+    for (int i = 0; i < HIST_BUCKETS; i++) {
         if (isnan(buf[i])) {
             cJSON_AddItemToArray(arr, cJSON_CreateNull());
         } else {

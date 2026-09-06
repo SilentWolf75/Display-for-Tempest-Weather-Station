@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "net.h"
 #include "wx_state.h"
 
@@ -50,9 +51,7 @@ void net_wifi_ui_active(bool active) { (void)active; }
 #include "config.h"
 #include "esp_timer.h"
 
-#if __has_include("secrets.h")
-#include "secrets.h"
-#endif
+#include "credentials_config.h"
 
 /* secrets.h only SEEDS the credentials on a first boot. Once anything has
  * been entered on the settings screen, NVS wins -- otherwise changing networks
@@ -245,9 +244,8 @@ esp_err_t net_init(void)
 
     if (cfg_has_wifi()) {
         wifi_config_t wcfg = {0};
-        strncpy((char *)wcfg.sta.ssid, c.wifi_ssid, sizeof(wcfg.sta.ssid) - 1);
-        strncpy((char *)wcfg.sta.password, c.wifi_password,
-                sizeof(wcfg.sta.password) - 1);
+        snprintf((char *)wcfg.sta.ssid, sizeof(wcfg.sta.ssid), "%.*s", (int)sizeof(wcfg.sta.ssid) - 1, c.wifi_ssid);
+        snprintf((char *)wcfg.sta.password, sizeof(wcfg.sta.password), "%.*s", (int)sizeof(wcfg.sta.password) - 1, c.wifi_password);
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wcfg));
     }
 

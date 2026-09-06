@@ -1,4 +1,5 @@
 #include "sdcard.h"
+#include <math.h>
 #include "board_pins.h"
 
 #include <stdio.h>
@@ -262,7 +263,7 @@ sdcard_fmt_state_t sdcard_format_state(void)
 esp_err_t sdcard_log_weather(const wx_state_t *s, int64_t now_epoch)
 {
     if (!s_mounted)            return ESP_ERR_INVALID_STATE;
-    if (!s || !s->obs_valid)   return ESP_ERR_INVALID_STATE;
+    if (!s || wx_obs_is_stale(s))   return ESP_ERR_INVALID_STATE;
     if (s_fmt == SDCARD_FMT_BUSY) return ESP_ERR_INVALID_STATE;
     /* Needs a real clock, or every row lands in 1970. */
     if (now_epoch < 1700000000LL) return ESP_ERR_INVALID_STATE;
@@ -324,9 +325,9 @@ esp_err_t sdcard_log_weather(const wx_state_t *s, int64_t now_epoch)
             (double)s->solar_radiation_wm2,
             (double)s->uv_index,
             (double)s->battery_v,
-            s->aqi_valid ? s->aqi_val : 0,
-            s->indoor_valid ? (double)wx_c_to_f(s->indoor_temp_c) : 0.0,
-            s->indoor_valid ? (double)s->indoor_humidity_pct : 0.0);
+            !wx_aqi_is_stale(s) ? s->aqi_val : -1,
+            !wx_indoor_is_stale(s) ? (double)wx_c_to_f(s->indoor_temp_c) : NAN,
+            !wx_indoor_is_stale(s) ? (double)s->indoor_humidity_pct : NAN);
 
     fclose(f);
     s_last_log_epoch = now_epoch;

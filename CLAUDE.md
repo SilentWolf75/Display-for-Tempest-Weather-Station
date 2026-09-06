@@ -36,9 +36,9 @@ Tempest REST API.
 - The **ESP32-P4 has no radio.** Wi-Fi is proxied to an ESP32-C6 over SDIO via
   ESP-Hosted / `esp_wifi_remote`. If `esp_wifi_init()` fails, it is a C6
   firmware/component version mismatch, not application code.
-- **UDP broadcast through ESP-Hosted is the project's biggest unknown.** Prove
-  it before building anything on top of it. `main.c` logs a warning every 30 s
-  if packets stop arriving while Wi-Fi is up.
+- UDP broadcast through ESP-Hosted was previously verified on this board.
+  Recheck it after transport or board-revision changes. The health loop logs
+  silence while Wi-Fi is up; WebSocket fallback tracks UDP separately.
 - **Every LVGL call from outside an LVGL callback must be wrapped** in
   `display_lock()` / `display_unlock()`. Unlocked calls hang the panel rather
   than crashing, so the symptom is confusing.
@@ -57,13 +57,9 @@ Tempest REST API.
 - The EK79007 config macro is `EK79007_1024_600_PANEL_60HZ_CONFIG(px_format)`
   for IDF < 6.0 (there is a separate `..._CONFIG_CF` variant for IDF 6). It sets
   the DSI lane rate to 900 Mbps and the DPI clock to 52 MHz.
-- **Creating `secrets.h` does not trigger a rebuild.** `tempest_rest.c` gates
-  on `__has_include("secrets.h")`, and ninja has no recorded
-  dependency on a file that did not exist at the last compile. The build
-  succeeds, the binary is byte-identical, and the credentials are silently
-  absent. After creating or first populating `secrets.h`, touch the two files
-  (or `idf.py fullclean`). The tell is binary size: with credentials present
-  the app is ~300 KB larger than without.
+- Credentials are generated into a build header by CMake. Creating, changing,
+  or removing secrets.h is tracked; a normal build is sufficient. An absent
+  file builds with an empty token and on-device Wi-Fi setup.
 - **Weather icons are Meteocons Lottie files rendered by ThorVG**, not a font.
   LVGL fonts are single-colour alpha masks and cannot be "realistic". See
   [docs/icons.md](docs/icons.md). Assets live on the SPIFFS `storage`
@@ -163,7 +159,9 @@ deliberately uses the `esp_lcd_ek79007` component's own config macros instead of
 hand-entered timings. Verify against the Elecrow schematic and their V1.1/V1.2
 example before driving pins, then define `BOARD_PINS_VERIFIED`.
 
-Nothing in `firmware/` has been compiled against real hardware yet.
+The README and bring-up log record prior hardware validation. The September 4
+reliability fixes were compiled and host-tested but have not been flashed or
+validated on the panel.
 
 ## Build
 

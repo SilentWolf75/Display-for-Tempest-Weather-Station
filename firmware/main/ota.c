@@ -1,4 +1,5 @@
 #include "ota.h"
+#include "config.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -20,111 +21,40 @@ static const char *TAG = "ota";
 
 static httpd_handle_t s_server;
 static volatile bool  s_in_progress;
-static bool           s_marked_valid;
 
 bool ota_in_progress(void)
 {
     return s_in_progress;
 }
 
-void ota_mark_valid(void)
-{
-    if (s_marked_valid) {
-        return;
-    }
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    esp_ota_img_states_t state;
-
-    if (running && esp_ota_get_state_partition(running, &state) == ESP_OK &&
-        state == ESP_OTA_IMG_PENDING_VERIFY) {
-        if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
-            ESP_LOGI(TAG, "image marked valid; rollback cancelled");
-        } else {
-            ESP_LOGE(TAG, "could not mark image valid -- it WILL roll back");
-        }
-    }
-    s_marked_valid = true;
-}
-
-/* ---- the page ----------------------------------------------------------- */
+/* Embedded separately so the browser upload can be regression-tested. */
+extern const unsigned char ota_html_start[] asm("_binary_ota_html_start");
+extern const unsigned char ota_html_end[] asm("_binary_ota_html_end");
+extern const unsigned char ota_js_start[] asm("_binary_ota_js_start");
+extern const unsigned char ota_js_end[] asm("_binary_ota_js_end");
 
 static esp_err_t root_get(httpd_req_t *req)
 {
-    const esp_app_desc_t *app = esp_app_get_description();
-    const esp_partition_t *run = esp_ota_get_running_partition();
-
-    char page[1400];
-    int n = snprintf(page, sizeof(page),
-        "<!doctype html><meta name=viewport content=\"width=device-width\">"
-        "<title>Weather Station Display</title>"
-        "<style>body{font:16px system-ui;max-width:34rem;margin:3rem auto;"
-        "padding:0 1rem;background:#0b0e13;color:#e8edf2}"
-        "h1{font-size:1.3rem;font-weight:500}"
-        "dl{display:grid;grid-template-columns:auto 1fr;gap:.3rem 1rem;"
-        "color:#7e8b99;font-size:.9rem}dd{margin:0;color:#e8edf2}"
-        "form{margin-top:2rem;padding:1rem;background:#151a22;border-radius:8px}"
-        "input,button{font:inherit;margin-top:.5rem}"
-        "button{background:#4fc3f7;border:0;color:#0b0e13;padding:.5rem 1rem;"
-        "border-radius:6px;cursor:pointer}"
-        "small{color:#7e8b99}</style>"
-        "<h1>Display for Tempest Weather Station</h1>"
-        "<dl>"
-        "<dt>version<dd>%s"
-        "<dt>built<dd>%s %s"
-        "<dt>running<dd>%s"
-        "<dt>free heap<dd>%u KB internal, %u KB PSRAM"
-        "</dl>"
-        "<form method=post action=/ota/update enctype=multipart/form-data "
-        "onsubmit=\"if(this.p)this.action='/ota/update?p='+encodeURIComponent(this.p.value)\">"
-        "<label>Firmware image (.bin)</label><br>"
-        "<input type=file name=f accept=.bin required><br>"
-        "%s"
-        "<button type=submit>Upload and restart</button>"
-        "<br><small>The panel restarts on success. If the new image fails to "
-        "start correctly it rolls back automatically.</small>"
-        "</form>",
-        app ? app->version : "?",
-        app ? app->date : "?", app ? app->time : "",
-        run ? run->label : "?",
-        (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
-        (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
-        CONFIG_OTA_PASSWORD[0]
-            ? "<label>Password</label><br>"
-              "<input type=password name=p required><br>"
-            : "<small>No password set -- anyone on this network can "
-              "reflash this device.</small><br>");
-
     httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, page, n);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, (const char *)ota_html_start,
+                           ota_html_end - ota_html_start - 1);
 }
 
-/* ---- the upload ---------------------------------------------------------
- * Deliberately NOT a multipart parser. The device streams the body straight
- * into flash, and esp_ota_write rejects anything without a valid image header,
- * so a form-encoded preamble fails safely. To script an update, POST the raw
- * binary with curl --data-binary, which is what docs/bringup.md documents.
- * -------------------------------------------------------------------------- */
+static esp_err_t script_get(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/javascript");
+    return httpd_resp_send(req, (const char *)ota_js_start,
+                           ota_js_end - ota_js_start - 1);
+}
 
 bool ota_password_ok(httpd_req_t *req)
 {
-    if (CONFIG_OTA_PASSWORD[0] == '\0') {
-        return true;
-    }
+    if (CONFIG_OTA_PASSWORD[0] == '\0') return true;
     char buf[64] = {0};
-    if (httpd_req_get_hdr_value_str(req, "X-OTA-Password", buf,
-                                    sizeof(buf)) == ESP_OK &&
-        strncmp(buf, CONFIG_OTA_PASSWORD, sizeof(buf)) == 0) {
-        return true;
-    }
-
-    /* Browser form cannot set a custom header. The page copies the password
-     * into ?p= on submit so curl --header still works and so does the form. */
-    char query[96] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
-        httpd_query_key_value(query, "p", buf, sizeof(buf)) == ESP_OK) {
-        return strncmp(buf, CONFIG_OTA_PASSWORD, sizeof(buf)) == 0;
-    }
-    return false;
+    return httpd_req_get_hdr_value_str(req, "X-OTA-Password", buf,
+                                       sizeof(buf)) == ESP_OK &&
+           strcmp(buf, CONFIG_OTA_PASSWORD) == 0;
 }
 
 static esp_err_t update_post(httpd_req_t *req)
@@ -177,12 +107,13 @@ static esp_err_t update_post(httpd_req_t *req)
 
     int remaining = req->content_len;
     int last_pct = -10;
+    int timeouts = 0;
 
     while (remaining > 0) {
         int want = remaining < CHUNK_SIZE ? remaining : CHUNK_SIZE;
         int got = httpd_req_recv(req, buf, want);
         if (got <= 0) {
-            if (got == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (got == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 3) {
                 continue;
             }
             ESP_LOGE(TAG, "receive failed with %d bytes left", remaining);
@@ -192,6 +123,7 @@ static esp_err_t update_post(httpd_req_t *req)
             return ESP_FAIL;
         }
 
+        timeouts = 0;
         err = esp_ota_write(handle, buf, got);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
@@ -241,6 +173,7 @@ static esp_err_t update_post(httpd_req_t *req)
 
     /* Let the response actually leave before the reset. */
     vTaskDelay(pdMS_TO_TICKS(1200));
+    cfg_flush();
     esp_restart();
     return ESP_OK;     /* not reached */
 }
@@ -270,6 +203,10 @@ esp_err_t ota_register(httpd_handle_t server)
         return err;
     }
 
+    httpd_uri_t script = { .uri = "/ota.js", .method = HTTP_GET,
+                           .handler = script_get };
+    err = httpd_register_uri_handler(server, &script);
+    if (err != ESP_OK) return err;
     s_registered = true;
     s_server = server;
 

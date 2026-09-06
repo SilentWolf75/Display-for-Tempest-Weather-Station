@@ -18,7 +18,7 @@ static const char *TAG = "indoor";
 #define AHT20_ADDR      0x38
 #define SHT4X_ADDR      0x44
 
-#define TASK_STACK      8192
+#define TASK_STACK      6144
 #define TASK_PRIO       3
 #define PROBE_TIMEOUT   100
 

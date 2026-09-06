@@ -129,27 +129,34 @@ static void build_row(int i)
     lv_obj_set_style_text_font(r->cond, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(r->cond, COL_TEXT, 0);
     lv_label_set_text(r->cond, "waiting for forecast");
-    lv_obj_set_pos(r->cond, 168, 16);
-    lv_obj_set_width(r->cond, 300);
+    lv_obj_set_pos(r->cond, 168, i == 0 ? 2 : 16);
+    lv_obj_set_size(r->cond, 300, 24);
     lv_label_set_long_mode(r->cond, LV_LABEL_LONG_DOT);
 
     r->now = lv_label_create(r->card);
     lv_obj_set_style_text_font(r->now, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(r->now, COL_CYAN, 0);
     lv_label_set_text(r->now, "");
-    lv_obj_set_pos(r->now, 478, 6);
+    /* Today uses a second line below conditions, not the low/high columns. */
+    lv_obj_set_pos(r->now, 168, 29);
+    lv_obj_set_size(r->now, 300, 18);
+    lv_label_set_long_mode(r->now, LV_LABEL_LONG_DOT);
 
     r->lo = lv_label_create(r->card);
     lv_obj_set_style_text_font(r->lo, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(r->lo, COL_COLD, 0);
     lv_label_set_text(r->lo, "--");
     lv_obj_set_pos(r->lo, 530, 16);
+    lv_obj_set_size(r->lo, 72, 26);
+    lv_label_set_long_mode(r->lo, LV_LABEL_LONG_DOT);
 
     r->hi = lv_label_create(r->card);
     lv_obj_set_style_text_font(r->hi, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(r->hi, COL_HOT, 0);
     lv_label_set_text(r->hi, "--");
     lv_obj_set_pos(r->hi, 610, 16);
+    lv_obj_set_size(r->hi, 86, 26);
+    lv_label_set_long_mode(r->hi, LV_LABEL_LONG_DOT);
 
     r->pop = lv_label_create(r->card);
     lv_obj_set_style_text_font(r->pop, &lv_font_montserrat_16, 0);
@@ -187,6 +194,8 @@ esp_err_t week_init(void)
     lv_obj_set_style_text_color(s_subtitle, COL_DIM, 0);
     lv_label_set_text(s_subtitle, "7-day outlook");
     lv_obj_set_pos(s_subtitle, 100, 16);
+    lv_obj_set_size(s_subtitle, 600, 18);
+    lv_label_set_long_mode(s_subtitle, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
     s_clock = lv_label_create(s_screen);
     lv_obj_set_style_text_font(s_clock, &lv_font_montserrat_20, 0);
@@ -379,7 +388,7 @@ void week_tick(void)
         }
 
         int pop = d->precip_probability;
-        strncpy(day_names[ndays], (i == 0) ? "TODAY" : day, sizeof(day_names[0]) - 1);
+        snprintf(day_names[ndays], sizeof(day_names[0]), "%.*s", (int)sizeof(day_names[0]) - 1, (i == 0) ? "TODAY" : day);
         day_names[ndays][sizeof(day_names[0]) - 1] = '\0';
         day_hi[ndays] = hi_c;
         day_pop[ndays] = pop;

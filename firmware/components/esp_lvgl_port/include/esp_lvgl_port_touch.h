@@ -38,6 +38,7 @@ typedef struct {
         float x;
         float y;
     } scale;                        /*!< Touch scale */
+    void (*io_result)(esp_err_t err); /*!< Optional; each GT911 I2C result */
 } lvgl_port_touch_cfg_t;
 
 /**

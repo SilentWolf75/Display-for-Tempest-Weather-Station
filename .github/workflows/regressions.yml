@@ -1,0 +1,18 @@
+name: Firmware logic regressions
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cmake -S tests/host -B build/host -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake --build build/host
+      - run: ctest --test-dir build/host --output-on-failure
+      - run: node tests/ota.test.cjs
+      - run: node tests/dashboard.test.cjs
+      - run: python3 tests/test_icon_lifecycle.py

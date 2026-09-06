@@ -38,6 +38,16 @@ menu "Display for Tempest Weather Station"
             The hub broadcasts unauthenticated JSON here. Do not change unless
             WeatherFlow does.
 
+    config TEMPEST_SENSOR_SERIAL
+        string "Tempest sensor serial (blank accepts any sensor)"
+        default ""
+        help
+            Set the ST- serial when more than one hub broadcasts on the LAN.
+
+    config TEMPEST_HUB_SERIAL
+        string "Tempest hub serial (blank accepts any hub)"
+        default ""
+
     config TEMPEST_FORECAST_INTERVAL_S
         int "Forecast poll interval (seconds)"
         default 600

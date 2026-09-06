@@ -7,6 +7,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -22,6 +23,8 @@ static const char *TAG = "config";
 
 static cfg_t             s_cfg;
 static SemaphoreHandle_t s_lock;
+static SemaphoreHandle_t s_save_lock;
+static TaskHandle_t s_save_task;
 
 static const cfg_t DEFAULTS = {
     .wifi_ssid         = "",
@@ -128,6 +131,30 @@ static esp_err_t persist(const cfg_t *c)
     return err;
 }
 
+esp_err_t cfg_flush(void)
+{
+    xSemaphoreTake(s_save_lock, portMAX_DELAY);
+    cfg_t c;
+    cfg_get(&c);
+    esp_err_t err = persist(&c);
+    xSemaphoreGive(s_save_lock);
+    return err;
+}
+
+static void save_task(void *arg)
+{
+    (void)arg;
+    while (1) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        /* Restart the debounce window whenever another value changes. */
+        while (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(750))) {}
+        if (cfg_flush() != ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            xTaskNotifyGive(s_save_task);
+        }
+    }
+}
+
 esp_err_t cfg_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
@@ -135,6 +162,9 @@ esp_err_t cfg_init(void)
         return ESP_ERR_NO_MEM;
     }
     s_cfg = DEFAULTS;
+    s_save_lock = xSemaphoreCreateMutex();
+    if (!s_save_lock || xTaskCreate(save_task, "cfg_save", 4096, NULL, 2,
+                                    &s_save_task) != pdPASS) return ESP_ERR_NO_MEM;
 
     nvs_handle_t h;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
@@ -142,7 +172,7 @@ esp_err_t cfg_init(void)
         return ESP_OK;
     }
 
-    stored_t blob;
+    stored_t blob = {0};
     size_t len = sizeof(blob);
     esp_err_t err = nvs_get_blob(h, NVS_BLOB_KEY, &blob, &len);
     nvs_close(h);
@@ -232,7 +262,8 @@ esp_err_t cfg_set(const cfg_t *in)
     if (!changed) {
         return ESP_OK;
     }
-    return persist(&next);
+    xTaskNotifyGive(s_save_task);
+    return ESP_OK;
 }
 
 esp_err_t cfg_set_wifi(const char *ssid, const char *password)
@@ -246,7 +277,8 @@ esp_err_t cfg_set_wifi(const char *ssid, const char *password)
     c.wifi_password[CFG_PASSWORD_LEN - 1] = '\0';
     /* Deliberately never logs the password. */
     ESP_LOGI(TAG, "wi-fi credentials stored for '%s'", c.wifi_ssid);
-    return cfg_set(&c);
+    esp_err_t err = cfg_set(&c);
+    return err == ESP_OK ? cfg_flush() : err;
 }
 
 bool cfg_has_wifi(void)
@@ -301,7 +333,8 @@ esp_err_t cfg_reset(void)
     cfg_get(&cur);
     memcpy(c.wifi_ssid, cur.wifi_ssid, sizeof(c.wifi_ssid));
     memcpy(c.wifi_password, cur.wifi_password, sizeof(c.wifi_password));
-    return cfg_set(&c);
+    esp_err_t err = cfg_set(&c);
+    return err == ESP_OK ? cfg_flush() : err;
 }
 
 bool cfg_is_night(int local_hour)

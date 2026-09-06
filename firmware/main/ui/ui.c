@@ -1726,7 +1726,8 @@ void ui_forecast_mode_changed(void)
         s_fc_icon_slug[i][0] = '\0';
         fc_set_icon(i, slug);
     }
-    s_icon_promote_step = FC_COLS + 1;
+    /* Forecast settings must not cancel a still-pending hero animation. */
+    if (s_cond_lottie) s_icon_promote_step = FC_COLS + 1;
 }
 
 void ui_notify_forecast_updated(void)
@@ -2177,7 +2178,7 @@ static void update_header(const wx_state_t *s, int64_t now)
     }
 
     if (hdr_aqi) {
-        if (s->aqi_valid && s->aqi_val > 0) {
+        if (!wx_aqi_is_stale(s)) {
             char aqi_buf[32];
             snprintf(aqi_buf, sizeof(aqi_buf), "AQI %d %s",
                      s->aqi_val, wx_aqi_epa_label(s->aqi_val));
@@ -2566,7 +2567,7 @@ static void update_mid_deck(const wx_state_t *s, int64_t now)
         snprintf(t7, sizeof(t7), U_RAIN_FMT, (double)U_RAIN(s->rain_7d_mm));
         snprintf(tm, sizeof(tm), U_RAIN_FMT, (double)U_RAIN(s->rain_month_mm));
         snprintf(ty, sizeof(ty), U_RAIN_FMT, (double)U_RAIN(s->rain_ytd_mm));
-        set_text(rain_totals_lbl, "7d %s  /  Mo %s  /  YTD %s",
+        set_text(rain_totals_lbl, "Partial: 7d %s / Mo %s / YTD %s",
                  t7, tm, ty);
     }
 
@@ -2978,14 +2979,17 @@ void ui_tick(void)
 
     static int64_t s_deck_obs, s_deck_rapid, s_deck_indoor;
     static int s_deck_aqi = -1, s_deck_units = -1;
+    static int64_t s_deck_min = -1;
     int units_now = (int)(strcmp(cfg_temp_suffix(), "C") == 0);
-    bool decks = fc_dirty ||
+    /* Sunrise/sunset can change the icon even with no new observations. */
+    bool decks = fc_dirty || now / 60 != s_deck_min ||
                  snap.obs_epoch != s_deck_obs ||
                  snap.rapid_epoch != s_deck_rapid ||
                  snap.indoor_fetched_epoch != s_deck_indoor ||
                  snap.aqi_val != s_deck_aqi ||
                  units_now != s_deck_units;
     if (decks) {
+        s_deck_min = now / 60;
         s_deck_obs = snap.obs_epoch;
         s_deck_rapid = snap.rapid_epoch;
         s_deck_indoor = snap.indoor_fetched_epoch;

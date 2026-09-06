@@ -11,6 +11,7 @@
  */
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "esp_err.h"
 
 esp_err_t tempest_udp_start(void);
@@ -21,4 +22,4 @@ void      tempest_udp_stop(void);
 uint32_t  tempest_udp_packet_count(void);
 
 /* Shared ingest path for UDP datagrams and WebSocket frames. */
-void      tempest_ingest_message(const char *json, int len);
+bool      tempest_ingest_message(const char *json, int len);

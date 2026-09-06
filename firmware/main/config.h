@@ -60,6 +60,7 @@ typedef struct {
 } cfg_t;
 
 esp_err_t cfg_init(void);
+esp_err_t cfg_flush(void);
 
 /* Snapshot. Cheap; copies a small struct under a lock. */
 void cfg_get(cfg_t *out);

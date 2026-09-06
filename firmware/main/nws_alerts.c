@@ -1,5 +1,7 @@
 #include "esp_heap_caps.h"
 #include "nws_alerts.h"
+#include "alert_policy.h"
+#include "esp_timer.h"
 #include "audio.h"
 #include "config.h"
 #include "wx_state.h"
@@ -18,33 +20,90 @@
 #include "esp_log.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
+#include "nvs.h"
 #include "cJSON.h"
 
 static const char *TAG = "nws_alerts";
+static char s_sounded_ids[16][64];
+static unsigned s_sounded_next;
+static TaskHandle_t s_task;
+static int64_t s_last_success;
+static bool s_last_poll_ok;
 
-static int64_t nws_parse_iso(const char *iso)
+#define NVS_NWS_NS       "nws"
+#define NVS_SIREN_ID_KEY "siren_id"
+
+/* NWS ids are URLs (~90+ chars). The unique oid is at the end; the shared
+ * prefix does not fit in 64 bytes, so strcmp(truncated, full) was always
+ * unequal and the siren retriggered on every 5-minute poll. */
+static void copy_alert_key(char *dst, size_t n, const char *src)
 {
-    if (!iso || !iso[0] || iso[0] == 'n') {
-        return 0;
+    if (!dst || n == 0) {
+        return;
     }
-    int y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0;
-    if (sscanf(iso, "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &sec) < 5) {
-        return 0;
+    dst[0] = '\0';
+    if (!src || !src[0]) {
+        return;
     }
-    struct tm t = {
-        .tm_year = y - 1900,
-        .tm_mon = mo - 1,
-        .tm_mday = d,
-        .tm_hour = h,
-        .tm_min = mi,
-        .tm_sec = sec,
-        .tm_isdst = -1,
-    };
-    time_t loc = mktime(&t);
-    if (loc == (time_t)-1) {
-        return 0;
+    size_t len = strlen(src);
+    if (len < n) {
+        memcpy(dst, src, len + 1);
+        return;
     }
-    return (int64_t)loc;
+    memcpy(dst, src + len - (n - 1), n - 1);
+    dst[n - 1] = '\0';
+}
+
+static bool alert_key_match(const char *stored, const char *id_str)
+{
+    char cur[64];
+    copy_alert_key(cur, sizeof(cur), id_str);
+    return stored[0] && cur[0] && strcmp(stored, cur) == 0;
+}
+
+static void siren_id_load(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NWS_NS, NVS_READONLY, &h) != ESP_OK) return;
+    size_t n = sizeof(s_sounded_ids);
+    if (nvs_get_blob(h, "sounded_ids", s_sounded_ids, &n) != ESP_OK ||
+        n != sizeof(s_sounded_ids)) {
+        memset(s_sounded_ids, 0, sizeof(s_sounded_ids));
+        n = sizeof(s_sounded_ids[0]);
+        nvs_get_str(h, NVS_SIREN_ID_KEY, s_sounded_ids[0], &n);
+    }
+    nvs_close(h);
+    for (int i = 0; i < 16; i++) s_sounded_ids[i][63] = '\0';
+    s_sounded_next = 1;
+}
+
+static void siren_id_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NWS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    if (nvs_set_blob(h, "sounded_ids", s_sounded_ids, sizeof(s_sounded_ids)) == ESP_OK)
+        nvs_commit(h);
+    nvs_close(h);
+}
+
+static bool already_sounded(const char *id)
+{
+    for (int i = 0; i < 16; i++)
+        if (alert_key_match(s_sounded_ids[i], id)) return true;
+    return false;
+}
+
+/* Settings label is "siren on active warning". Advisories stay on the
+ * ticker; they must not blast the NOAA tone every poll. */
+static bool alert_warrants_siren(const char *event, const char *severity)
+{
+    (void)severity;
+    if (!event || strstr(event, "Advisory") || strstr(event, "Statement") ||
+        strstr(event, "Outlook")) {
+        return false;
+    }
+    return strstr(event, "Warning") || strstr(event, "Watch") ||
+           strstr(event, "Emergency") || strstr(event, "Tornado");
 }
 
 static void copy_flat(char *dst, size_t dst_n, const char *src, size_t max_copy)
@@ -164,14 +223,15 @@ void nws_format_ticker(const nws_alert_t *alert, char *buf, size_t n)
 }
 
 #define NWS_POLL_INTERVAL_S   300     /* 5 minutes — HTTPS over SDIO blanks the panel */
-#define TASK_STACK_SIZE       12288
+#define TASK_STACK_SIZE       8192
 #define TASK_PRIO             3
 #define HTTP_BUF_SIZE         (48 * 1024)
 
-static nws_alert_t       s_current_alert = {0};
+static nws_alert_t *s_alerts;
+static int s_alert_count;
 static nws_forecast_t    s_forecast = {0};
 static SemaphoreHandle_t s_alert_lock = NULL;
-static char              s_last_sounded_id[64] = {0};
+
 static char              s_cached_zip[10];
 static float             s_cached_lat;
 static float             s_cached_lon;
@@ -344,7 +404,7 @@ static void fetch_nws_forecast(float lat, float lon)
             strncpy(s_forecast.state, st->valuestring, sizeof(s_forecast.state) - 1);
             s_forecast.state[sizeof(s_forecast.state) - 1] = '\0';
         }
-        strncpy(s_forecast.office, s_grid_office, sizeof(s_forecast.office) - 1);
+        snprintf(s_forecast.office, sizeof(s_forecast.office), "%.*s", (int)sizeof(s_forecast.office) - 1, s_grid_office);
         xSemaphoreGive(s_alert_lock);
         cJSON_Delete(root);
         ESP_LOGI(TAG, "NWS grid %s/%d,%d radar %s %s %s",
@@ -403,6 +463,31 @@ static void fetch_nws_forecast(float lat, float lon)
     }
 }
 
+/* Own HTTPS window, and only when AES still has internal RAM. Stacking this
+ * on the alerts GET plus the NOAA siren is what froze the panel (esp-aes
+ * alloc failed while LVGL was locked). */
+static void maybe_nws_forecast(float lat, float lon)
+{
+    int64_t now = (int64_t)time(NULL);
+    if (s_forecast.valid && s_forecast.fetched_epoch > 0 &&
+        (now - s_forecast.fetched_epoch) < 900) {
+        return;
+    }
+    size_t heap = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    if (heap < 48 * 1024) {
+        ESP_LOGW(TAG, "skip NWS forecast, internal heap %u B", (unsigned)heap);
+        return;
+    }
+    if (audio_is_playing()) {
+        ESP_LOGI(TAG, "skip NWS forecast while alert audio plays");
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(500));
+    display_https_begin();
+    fetch_nws_forecast(lat, lon);
+    display_https_end();
+}
+
 static void poll_nws_alerts(void)
 {
     cfg_t cfg;
@@ -411,6 +496,14 @@ static void poll_nws_alerts(void)
     if (strlen(cfg.alert_zipcode) < 5) {
         return;
     }
+    xSemaphoreTake(s_alert_lock, portMAX_DELAY);
+    s_last_poll_ok = false;
+    if (strcmp(s_cached_zip, cfg.alert_zipcode) != 0) {
+        s_alert_count = 0;
+        s_last_success = 0;
+        s_forecast.valid = false;
+    }
+    xSemaphoreGive(s_alert_lock);
     display_https_begin();
 
     float lat = 0.0f, lon = 0.0f;
@@ -440,7 +533,6 @@ static void poll_nws_alerts(void)
 
     char *resp_buf = heap_caps_malloc(HTTP_BUF_SIZE, MALLOC_CAP_SPIRAM);
     if (!resp_buf) {
-        fetch_nws_forecast(lat, lon);
         display_https_end();
         return;
     }
@@ -459,7 +551,6 @@ static void poll_nws_alerts(void)
     esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
     if (!client) {
         free(resp_buf);
-        fetch_nws_forecast(lat, lon);
         display_https_end();
         return;
     }
@@ -475,7 +566,6 @@ static void poll_nws_alerts(void)
                  status, esp_err_to_name(err),
                  acc.overflow ? " (truncated)" : "");
         free(resp_buf);
-        fetch_nws_forecast(lat, lon);
         display_https_end();
         return;
     }
@@ -484,101 +574,89 @@ static void poll_nws_alerts(void)
     free(resp_buf);
     if (!root) {
         ESP_LOGW(TAG, "failed to parse NWS JSON response");
-        fetch_nws_forecast(lat, lon);
         display_https_end();
         return;
     }
 
     cJSON *features = cJSON_GetObjectItemCaseSensitive(root, "features");
-    if (!cJSON_IsArray(features) || cJSON_GetArraySize(features) == 0) {
-        /* No active alerts for this zone */
-        xSemaphoreTake(s_alert_lock, portMAX_DELAY);
-        s_current_alert.active = false;
-        xSemaphoreGive(s_alert_lock);
+    if (!cJSON_IsArray(features)) {
         cJSON_Delete(root);
-        fetch_nws_forecast(lat, lon);
         display_https_end();
         return;
     }
-
-    /* Grab the highest priority alert */
-    cJSON *feat0 = cJSON_GetArrayItem(features, 0);
-    cJSON *props = cJSON_GetObjectItemCaseSensitive(feat0, "properties");
-    if (!props) {
-        cJSON_Delete(root);
-        fetch_nws_forecast(lat, lon);
-        display_https_end();
-        return;
-    }
-
-    cJSON *id_obj       = cJSON_GetObjectItemCaseSensitive(props, "id");
-    cJSON *event_obj    = cJSON_GetObjectItemCaseSensitive(props, "event");
-    cJSON *headline_obj = cJSON_GetObjectItemCaseSensitive(props, "headline");
-    cJSON *severity_obj = cJSON_GetObjectItemCaseSensitive(props, "severity");
-    cJSON *ends_obj     = cJSON_GetObjectItemCaseSensitive(props, "ends");
-    cJSON *expires_obj  = cJSON_GetObjectItemCaseSensitive(props, "expires");
-    cJSON *instr_obj    = cJSON_GetObjectItemCaseSensitive(props, "instruction");
-
-    const char *id_str = cJSON_IsString(id_obj) ? id_obj->valuestring : "";
-    const char *event_str = cJSON_IsString(event_obj) ? event_obj->valuestring : "Weather Alert";
-    const char *headline_str = cJSON_IsString(headline_obj) ? headline_obj->valuestring : "";
-    const char *severity_str = cJSON_IsString(severity_obj) ? severity_obj->valuestring : "Severe";
-    const char *ends_str = cJSON_IsString(ends_obj) ? ends_obj->valuestring : "";
-    const char *expires_str = cJSON_IsString(expires_obj) ? expires_obj->valuestring : "";
-    const char *instr_str = cJSON_IsString(instr_obj) ? instr_obj->valuestring : "";
-
-    int64_t ends_epoch = nws_parse_iso(ends_str);
-    if (ends_epoch <= 0) {
-        ends_epoch = nws_parse_iso(expires_str);
-    }
-
+    int64_t now = (int64_t)time(NULL);
     xSemaphoreTake(s_alert_lock, portMAX_DELAY);
-    s_current_alert.active = true;
-    strncpy(s_current_alert.id, id_str, sizeof(s_current_alert.id) - 1);
-    s_current_alert.id[sizeof(s_current_alert.id) - 1] = '\0';
-    strncpy(s_current_alert.event, event_str, sizeof(s_current_alert.event) - 1);
-    s_current_alert.event[sizeof(s_current_alert.event) - 1] = '\0';
-    strncpy(s_current_alert.headline, headline_str, sizeof(s_current_alert.headline) - 1);
-    s_current_alert.headline[sizeof(s_current_alert.headline) - 1] = '\0';
-    copy_flat(s_current_alert.instruction, sizeof(s_current_alert.instruction),
-              instr_str, sizeof(s_current_alert.instruction) - 1);
-    strncpy(s_current_alert.severity, severity_str, sizeof(s_current_alert.severity) - 1);
-    s_current_alert.severity[sizeof(s_current_alert.severity) - 1] = '\0';
-    s_current_alert.expires_epoch = ends_epoch;
-
-    /* Should we trigger the audible emergency siren & voice broadcast? */
-    bool is_new_event = (strcmp(s_last_sounded_id, id_str) != 0);
-    if (is_new_event && cfg.alert_siren_enabled) {
-        strncpy(s_last_sounded_id, id_str, sizeof(s_last_sounded_id) - 1);
-        s_last_sounded_id[sizeof(s_last_sounded_id) - 1] = '\0';
-
-        /* Nighttime DND Filter Check: Only life-threatening alerts sound during night hours */
-        bool allow_sound = true;
-        if (cfg.night_alert_dnd) {
-            time_t now_t = time(NULL);
-            struct tm lt;
-            localtime_r(&now_t, &lt);
-            if (cfg_is_night(lt.tm_hour)) {
-                bool is_life_threatening = (strstr(event_str, "Tornado") != NULL ||
-                                            strstr(event_str, "Flood") != NULL ||
-                                            strstr(event_str, "Severe Thunderstorm") != NULL);
-                if (!is_life_threatening) {
-                    allow_sound = false;
-                    ESP_LOGI(TAG, "Night DND active: Silenced non-critical alert '%s'", event_str);
-                }
-            }
+    s_alert_count = 0;
+    memset(s_alerts, 0, 16 * sizeof(*s_alerts));
+    const cJSON *feature;
+    cJSON_ArrayForEach(feature, features) {
+        const cJSON *props = cJSON_GetObjectItemCaseSensitive(feature, "properties");
+        if (!cJSON_IsObject(props)) continue;
+        nws_alert_t alert = { .active = true };
+        const char *keys[] = {"id", "event", "headline", "severity", "instruction"};
+        char *dest[] = {alert.id, alert.event, alert.headline, alert.severity, alert.instruction};
+        size_t sizes[] = {sizeof(alert.id), sizeof(alert.event), sizeof(alert.headline),
+                          sizeof(alert.severity), sizeof(alert.instruction)};
+        for (int i = 0; i < 5; i++) {
+            const cJSON *v = cJSON_GetObjectItemCaseSensitive(props, keys[i]);
+            if (!cJSON_IsString(v)) continue;
+            if (i == 0) copy_alert_key(dest[i], sizes[i], v->valuestring);
+            else copy_flat(dest[i], sizes[i], v->valuestring, sizes[i] - 1);
         }
+        const cJSON *ends = cJSON_GetObjectItemCaseSensitive(props, "ends");
+        const cJSON *expires = cJSON_GetObjectItemCaseSensitive(props, "expires");
+        alert.expires_epoch = nws_parse_iso(cJSON_IsString(ends) ? ends->valuestring : NULL);
+        if (!alert.expires_epoch)
+            alert.expires_epoch = nws_parse_iso(cJSON_IsString(expires) ? expires->valuestring : NULL);
+        if (!alert.event[0] || !nws_alert_live(&alert, now)) continue;
+        /* Keep the highest-ranked entries even when the response exceeds capacity. */
+        bool full = s_alert_count == 16;
+        int pos = full ? 15 : s_alert_count++;
+        if (full &&
+            nws_alert_rank(&alert) <= nws_alert_rank(&s_alerts[pos])) continue;
+        while (pos > 0 && nws_alert_rank(&alert) > nws_alert_rank(&s_alerts[pos-1])) {
+            s_alerts[pos] = s_alerts[pos-1];
+            pos--;
+        }
+        s_alerts[pos] = alert;
+    }
+    s_last_success = now;
+    s_last_poll_ok = true;
+    xSemaphoreGive(s_alert_lock);
+    cJSON_Delete(root);
+    display_https_end();
+}
 
-        if (allow_sound) {
-            ESP_LOGW(TAG, "EMERGENCY NOAA WEATHER ALERT: %s - siren and event clip", event_str);
-            audio_play_full_noaa_broadcast(event_str);
+/* Called only by the NWS task, outside HTTP and outside the display lock. */
+static void service_siren(void)
+{
+    if (audio_is_playing()) return;
+    cfg_t cfg;
+    cfg_get(&cfg);
+    if (!cfg.alert_siren_enabled) return;
+    nws_alert_t pending = {0};
+    int64_t now = (int64_t)time(NULL);
+    time_t t = (time_t)now;
+    struct tm lt;
+    localtime_r(&t, &lt);
+    xSemaphoreTake(s_alert_lock, portMAX_DELAY);
+    if (now - s_last_success <= 2 * NWS_POLL_INTERVAL_S) {
+        for (int i = 0; i < s_alert_count; i++) {
+            const nws_alert_t *a = &s_alerts[i];
+            if (!a->id[0] || !nws_alert_live(a, now) || already_sounded(a->id) ||
+                !alert_warrants_siren(a->event, a->severity)) continue;
+            bool critical = strstr(a->event, "Tornado") || strstr(a->event, "Flood") ||
+                            strstr(a->event, "Severe Thunderstorm");
+            if (cfg.night_alert_dnd && cfg_is_night(lt.tm_hour) && !critical) continue;
+            pending = *a;
+            break;
         }
     }
     xSemaphoreGive(s_alert_lock);
-
-    cJSON_Delete(root);
-    fetch_nws_forecast(lat, lon);
-    display_https_end();
+    if (pending.active && audio_play_full_noaa_broadcast(pending.event)) {
+        copy_alert_key(s_sounded_ids[s_sounded_next++ % 16], 64, pending.id);
+        siren_id_save();
+    }
 }
 
 bool nws_forecast_get(nws_forecast_t *out)
@@ -596,48 +674,61 @@ bool nws_forecast_get(nws_forecast_t *out)
 static void nws_task(void *arg)
 {
     (void)arg;
-
-    /* Wait for Wi-Fi and clock sync */
-    while (!net_is_connected()) {
-        vTaskDelay(pdMS_TO_TICKS(2000));
-    }
-    vTaskDelay(pdMS_TO_TICKS(5000));
-
+    int64_t next_poll = 0;
     while (1) {
-        if (net_is_connected()) {
+        bool refresh = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000)) != 0;
+        int64_t now = esp_timer_get_time();
+        if (refresh) next_poll = 0;
+        if (net_is_connected() && now >= next_poll) {
             poll_nws_alerts();
-            /* NWS HTTPS over SDIO has wedged the shared I2C bus (GT911)
-             * on this board; reset it before the next touch poll. */
-            vTaskDelay(pdMS_TO_TICKS(200));
+            if (s_cached_coords && !audio_is_playing())
+                maybe_nws_forecast(s_cached_lat, s_cached_lon);
             display_recover_after_sdio("nws");
+            next_poll = esp_timer_get_time() + NWS_POLL_INTERVAL_S * 1000000LL;
         }
-        vTaskDelay(pdMS_TO_TICKS(NWS_POLL_INTERVAL_S * 1000));
+        service_siren();
     }
 }
 
 esp_err_t nws_alerts_start(void)
 {
     s_alert_lock = xSemaphoreCreateMutex();
-    if (!s_alert_lock) return ESP_ERR_NO_MEM;
-
-    if (xTaskCreate(nws_task, "nws_alerts", TASK_STACK_SIZE, NULL, TASK_PRIO, NULL) != pdPASS) {
-        return ESP_ERR_NO_MEM;
-    }
-    ESP_LOGI(TAG, "NWS Weather Alerts background monitor online");
+    s_alerts = heap_caps_calloc(16, sizeof(nws_alert_t), MALLOC_CAP_SPIRAM);
+    if (!s_alert_lock || !s_alerts) return ESP_ERR_NO_MEM;
+    siren_id_load();
+    if (xTaskCreate(nws_task, "nws_alerts", TASK_STACK_SIZE, NULL, TASK_PRIO,
+                    &s_task) != pdPASS) return ESP_ERR_NO_MEM;
     return ESP_OK;
 }
 
 void nws_alerts_refresh(void)
 {
-    poll_nws_alerts();
+    if (s_task) xTaskNotifyGive(s_task);
+}
+
+bool nws_alerts_is_current(void)
+{
+    if (!s_alert_lock) return false;
+    xSemaphoreTake(s_alert_lock, portMAX_DELAY);
+    int64_t now = (int64_t)time(NULL);
+    bool ok = s_last_poll_ok && s_last_success > 1600000000LL &&
+              now - s_last_success <= 2 * NWS_POLL_INTERVAL_S;
+    xSemaphoreGive(s_alert_lock);
+    return ok;
 }
 
 bool nws_alerts_get_active(nws_alert_t *out_alert)
 {
     if (!s_alert_lock || !out_alert) return false;
+    memset(out_alert, 0, sizeof(*out_alert));
+    int64_t now = (int64_t)time(NULL);
     xSemaphoreTake(s_alert_lock, portMAX_DELAY);
-    *out_alert = s_current_alert;
-    bool act = s_current_alert.active;
+    for (int i = 0; i < s_alert_count; i++) {
+        if (nws_alert_live(&s_alerts[i], now)) {
+            *out_alert = s_alerts[i];
+            break;
+        }
+    }
     xSemaphoreGive(s_alert_lock);
-    return act;
+    return out_alert->active;
 }

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Weather Station Display - Update</title>
+<style>body{font:16px system-ui;max-width:34rem;margin:3rem auto;padding:0 1rem;background:#0b0e13;color:#e8edf2}h1{font-size:1.3rem}form{padding:1rem;background:#151a22;border-radius:8px}input,button{font:inherit;margin:.5rem 0}button{padding:.6rem;background:#4fc3f7;border:0;border-radius:6px}small{color:#a4b0bd}progress{width:100%}</style>
+<h1>Update Weather Station Display</h1>
+<p>Choose the app file <strong>tempest_display.bin</strong>.</p>
+<form id="upload">
+<label for="firmware">Firmware image</label><br>
+<input id="firmware" type="file" accept=".bin" required><br>
+<label for="password">Update password <small>(leave blank if none is set)</small></label><br>
+<input id="password" type="password" autocomplete="current-password"><br>
+<button id="submit" type="submit">Upload and restart</button>
+<progress id="progress" max="100" value="0"></progress>
+<p id="status" role="status" aria-live="polite"></p>
+<small>Use the app image, not the merged USB installer. The panel restarts after a successful update.</small>
+</form><script src="/ota.js"></script></html>

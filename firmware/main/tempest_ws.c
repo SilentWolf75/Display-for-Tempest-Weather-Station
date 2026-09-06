@@ -7,22 +7,15 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_websocket_client.h"
 #include "esp_crt_bundle.h"
 
-#include "secrets.h"
+#include "credentials_config.h"
 
 static const char *TAG = "tempest_ws";
 
-#define WS_STACK        8192
-#define WS_PRIO         4
-#define CHECK_INTERVAL_MS 30000
-
-static TaskHandle_t            s_task;
 static esp_websocket_client_handle_t s_client;
 static volatile bool           s_active;
 static volatile bool           s_running;
@@ -82,7 +75,6 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
     case WEBSOCKET_EVENT_DATA:
         if (data->op_code == WS_TRANSPORT_OPCODES_TEXT && data->data_len > 0) {
             tempest_ingest_message(data->data_ptr, data->data_len);
-            wx_note_udp_packet();
         }
         break;
     case WEBSOCKET_EVENT_ERROR:
@@ -135,39 +127,33 @@ static esp_err_t ws_connect(void)
     return ESP_OK;
 }
 
-static void ws_monitor_task(void *arg)
+void tempest_ws_poll(void)
 {
-    (void)arg;
-
-    while (s_running) {
-        vTaskDelay(pdMS_TO_TICKS(CHECK_INTERVAL_MS));
-
-        if (!net_is_connected() || TEMPEST_API_TOKEN[0] == '\0') {
-            if (s_client) {
-                ws_disconnect();
-            }
-            continue;
-        }
-
-        wx_state_t snap;
-        wx_snapshot(&snap);
-
-        if (!wx_udp_is_stale(&snap)) {
-            if (s_client) {
-                ESP_LOGI(TAG, "UDP resumed — closing WebSocket fallback");
-                ws_disconnect();
-            }
-            continue;
-        }
-
-        if (!s_client && snap.wifi_connected) {
-            ws_connect();
-        }
+    if (!s_running) {
+        return;
     }
 
-    ws_disconnect();
-    s_task = NULL;
-    vTaskDelete(NULL);
+    if (!net_is_connected() || TEMPEST_API_TOKEN[0] == '\0') {
+        if (s_client) {
+            ws_disconnect();
+        }
+        return;
+    }
+
+    wx_state_t snap;
+    wx_snapshot(&snap);
+
+    if (!wx_udp_is_stale(&snap)) {
+        if (s_client) {
+            ESP_LOGI(TAG, "UDP resumed — closing WebSocket fallback");
+            ws_disconnect();
+        }
+        return;
+    }
+
+    if (!s_client && snap.wifi_connected) {
+        ws_connect();
+    }
 }
 
 esp_err_t tempest_ws_start(void)
@@ -176,15 +162,7 @@ esp_err_t tempest_ws_start(void)
         ESP_LOGI(TAG, "no API token — WebSocket fallback disabled");
         return ESP_OK;
     }
-    if (s_task) {
-        return ESP_ERR_INVALID_STATE;
-    }
     s_running = true;
-    if (xTaskCreate(ws_monitor_task, "tempest_ws", WS_STACK, NULL,
-                    WS_PRIO, &s_task) != pdPASS) {
-        s_running = false;
-        return ESP_ERR_NO_MEM;
-    }
     return ESP_OK;
 }
 

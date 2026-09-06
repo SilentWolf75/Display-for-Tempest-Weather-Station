@@ -4,6 +4,8 @@
 
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include <string.h>
 #include "driver/i2c_master.h"
 #include "driver/ledc.h"
@@ -14,6 +16,8 @@
 #include "esp_lcd_ek79007.h"
 #include "esp_lcd_touch_gt911.h"
 #include "esp_lvgl_port.h"
+#include "hal/axi_icm_ll.h"
+#include <stdatomic.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -51,9 +55,14 @@ static uint8_t                    s_brightness_pct = 100;
 static volatile bool              s_recover_req;
 static const char                *s_recover_reason;
 static bool                       s_recover_i2c;
+static bool                       s_recover_panel;
+static portMUX_TYPE               s_recover_mux = portMUX_INITIALIZER_UNLOCKED;
+static atomic_uint                s_render_count;
 static volatile int               s_https_busy;
 static SemaphoreHandle_t          s_https_mux;
 static bool                       s_https_holds_lvgl;
+static int                        s_touch_fail;
+static int64_t                    s_last_touch_i2c_us;
 
 static esp_err_t init_backlight(void)
 {
@@ -178,54 +187,66 @@ uint8_t display_get_brightness(void)
 
 void display_recover_after_sdio(const char *reason)
 {
+    /* Network completion is not evidence of a lost panel. Repainting the
+     * entire screen after every request adds competing PSRAM traffic.
+     * Only boot needs a repaint; sensor failures need an I2C-only reset. */
+    bool i2c = reason && strcmp(reason, "indoor") == 0;
+    bool repaint = reason && strcmp(reason, "wifi") == 0;
+    if (!i2c && !repaint) return;
+    portENTER_CRITICAL(&s_recover_mux);
     s_recover_reason = reason;
-    /* I2C reset only when the indoor task actually lost the bus. Resetting
-     * GT911 after every HTTPS poll is what wedged the panel into the
-     * backlight-on / no-pixels (light-blue) state. */
-    s_recover_i2c = (reason && strcmp(reason, "indoor") == 0);
+    s_recover_i2c |= i2c;
+    s_recover_panel |= repaint;
     s_recover_req = true;
-    uint8_t b = s_brightness_pct < 75 ? 75 : s_brightness_pct;
-    display_set_brightness(b);
-
-    ESP_LOGW(TAG, "panel recover requested after %s (backlight %u%%)",
-             reason ? reason : "sdio", (unsigned)b);
+    portEXIT_CRITICAL(&s_recover_mux);
 }
+
+/* One TLS session at a time. The old mutex was released as soon as the
+ * nest count updated, so NWS + Tempest REST + AQI could all handshake
+ * together and starve the internal AES/TLS heap (esp-aes alloc failed,
+ * LVGL stayed locked, panel frozen). */
+#define HTTPS_HEAP_MIN  (48 * 1024)
 
 void display_https_begin(void)
 {
     if (s_https_mux) {
-        xSemaphoreTake(s_https_mux, portMAX_DELAY);
+        xSemaphoreTakeRecursive(s_https_mux, portMAX_DELAY);
     }
     if (s_https_busy++ == 0) {
-        /* Freeze LVGL (and GT911) so MIPI DMA is idle while the C6 SDIO
-         * link is busy. A frozen last frame is far better than a blank
-         * backlight-on panel. Recursive, so a settings-button refresh is safe. */
-        if (lvgl_port_lock(15000)) {
-            s_https_holds_lvgl = true;
-        } else {
-            ESP_LOGW(TAG, "https: could not pause LVGL");
+        for (int i = 0; i < 6; i++) {
+            size_t heap = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            if (heap >= HTTPS_HEAP_MIN) {
+                break;
+            }
+            ESP_LOGW(TAG, "https wait, internal heap %u B", (unsigned)heap);
+            vTaskDelay(pdMS_TO_TICKS(500));
         }
-    }
-    if (s_https_mux) {
-        xSemaphoreGive(s_https_mux);
+        ESP_LOGI(TAG, "https begin (internal %u, psram %u)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        /* Do not hold the LVGL lock for the whole transfer. Indoor and
+         * Lottie already stand down via display_https_busy(); a hung
+         * handshake used to leave the panel frozen forever. */
     }
 }
 
 void display_https_end(void)
 {
-    if (s_https_mux) {
-        xSemaphoreTake(s_https_mux, portMAX_DELAY);
-    }
     if (s_https_busy > 0) {
         s_https_busy--;
     }
-    if (s_https_busy == 0 && s_https_holds_lvgl) {
-        s_https_holds_lvgl = false;
-        lvgl_port_unlock();
+    if (s_https_busy == 0) {
+        if (s_https_holds_lvgl) {
+            s_https_holds_lvgl = false;
+            lvgl_port_unlock();
+        }
         display_recover_after_sdio("https");
+        ESP_LOGI(TAG, "https end (internal %u, psram %u)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     }
     if (s_https_mux) {
-        xSemaphoreGive(s_https_mux);
+        xSemaphoreGiveRecursive(s_https_mux);
     }
 }
 
@@ -234,42 +255,74 @@ bool display_https_busy(void)
     return s_https_busy > 0;
 }
 
+void display_note_touch_io(esp_err_t err)
+{
+    if (err == ESP_OK) {
+        s_touch_fail = 0;
+        return;
+    }
+    s_touch_fail++;
+    /* Do not yank the bus while HTTPS owns SDIO. The counter still climbs
+     * so we reset as soon as the fetch ends. */
+    if (s_https_busy) {
+        return;
+    }
+    /* ~25 polls at 50 ms. The overnight wedge never recovered on its own. */
+    if (s_touch_fail < 25) {
+        return;
+    }
+    int64_t now = esp_timer_get_time();
+    if (s_last_touch_i2c_us && (now - s_last_touch_i2c_us) < 12 * 1000000LL) {
+        return;
+    }
+    s_touch_fail = 0;
+    s_last_touch_i2c_us = now;
+    portENTER_CRITICAL(&s_recover_mux);
+    s_recover_reason = "touch";
+    s_recover_i2c = true;
+    s_recover_req = true;
+    portEXIT_CRITICAL(&s_recover_mux);
+    ESP_LOGW(TAG, "GT911 I2C wedged after long run; bus reset queued");
+}
+
 bool display_apply_recover_request(void)
 {
+    portENTER_CRITICAL(&s_recover_mux);
     if (!s_recover_req) {
+        portEXIT_CRITICAL(&s_recover_mux);
         return false;
     }
-    s_recover_req = false;
     bool do_i2c = s_recover_i2c;
+    bool do_panel = s_recover_panel;
+    const char *reason = s_recover_reason;
+    s_recover_req = false;
     s_recover_i2c = false;
+    s_recover_panel = false;
+    portEXIT_CRITICAL(&s_recover_mux);
 
-    /* Reset I2C only when the indoor sensor actually lost the bus. A reset
+    /* Reset I2C when GT911 or the indoor sensor lost the bus. A reset
      * after every NWS/forecast HTTPS poll was knocking GT911 and MIPI over. */
     if (do_i2c && s_i2c) {
         esp_err_t ierr = i2c_master_bus_reset(s_i2c);
         if (ierr != ESP_OK) {
             ESP_LOGW(TAG, "i2c bus reset after %s: %s",
-                     s_recover_reason ? s_recover_reason : "sdio",
+                     reason ? reason : "sdio",
                      esp_err_to_name(ierr));
         } else {
             ESP_LOGI(TAG, "i2c bus reset after %s",
-                     s_recover_reason ? s_recover_reason : "sdio");
+                     reason ? reason : "sdio");
         }
     }
 
-    if (s_panel) {
-        /* Off/on re-asserts the EK79007 stream if DPI dropped mid-SDIO. */
-        (void)esp_lcd_panel_disp_on_off(s_panel, false);
-        vTaskDelay(pdMS_TO_TICKS(20));
-        esp_err_t err = esp_lcd_panel_disp_on_off(s_panel, true);
-        if (err != ESP_OK && err != ESP_ERR_NOT_SUPPORTED) {
-            ESP_LOGW(TAG, "disp_on_off failed: %s", esp_err_to_name(err));
-        }
+    if (!do_panel) {
+        ESP_LOGI(TAG, "i2c-only recover applied (%s)",
+                 reason ? reason : "touch");
+        return false;
     }
 
-    uint8_t b = s_brightness_pct < 75 ? 75 : s_brightness_pct;
-    display_set_brightness(b);
-
+    /* EK79007/DPI in IDF 5.5 has no disp_on_off implementation. The
+     * previous off/on calls returned NOT_SUPPORTED and could not recover
+     * an underrun. Leave PWM at the user's selected brightness. */
     lv_obj_t *scr = lv_screen_active();
     if (scr) {
         lv_obj_invalidate(scr);
@@ -278,12 +331,9 @@ bool display_apply_recover_request(void)
     if (top) {
         lv_obj_invalidate(top);
     }
-    if (s_disp) {
-        lv_refr_now(s_disp);
-    }
 
-    ESP_LOGI(TAG, "panel recover applied (%s, backlight %u%%)",
-             s_recover_reason ? s_recover_reason : "sdio", (unsigned)b);
+    ESP_LOGI(TAG, "panel repaint queued (%s, backlight %u%%)",
+             reason ? reason : "sdio", (unsigned)s_brightness_pct);
     return true;
 }
 
@@ -346,6 +396,13 @@ static esp_err_t init_panel(void)
 
     esp_lcd_dpi_panel_config_t dpi_config =
         EK79007_1024_600_PANEL_60HZ_CONFIG(LCD_COLOR_PIXEL_FORMAT_RGB565);
+
+    /* Scanout is deadline-sensitive: a missed PSRAM read causes the DPI
+     * bridge's persistent blue-screen underrun. Give its DW-GDMA reads
+     * priority over best-effort CPU/cache/DMA2D traffic. Both master ports
+     * belong to DW-GDMA; keep writes at their reset priority. */
+    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(0, 0, 15);
+    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(1, 0, 15);
 
     /* One frame buffer: tear-avoidance is off (see init_lvgl), so LVGL never
      * asks for a second one to flip between. */
@@ -436,6 +493,24 @@ static esp_err_t init_touch(void)
     return ESP_OK;
 }
 
+static void display_render_done(lv_event_t *event)
+{
+    (void)event;
+    atomic_fetch_add_explicit(&s_render_count, 1, memory_order_relaxed);
+}
+
+void display_log_health(void)
+{
+    /* A running lv_tick timer is not proof that LVGL is rendering. */
+    unsigned renders = atomic_load_explicit(&s_render_count, memory_order_relaxed);
+    bool locked = display_lock(100);
+    ESP_LOGI(TAG, "health: renders=%u lvgl_lock=%s internal_min=%u largest=%u",
+             renders, locked ? "ok" : "busy",
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    if (locked) display_unlock();
+}
+
 static esp_err_t init_lvgl(void)
 {
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
@@ -489,12 +564,17 @@ static esp_err_t init_lvgl(void)
     s_disp = lvgl_port_add_disp_dsi(&disp_cfg, &dsi_cfg);
     ESP_RETURN_ON_FALSE(s_disp, ESP_FAIL, TAG, "lvgl display");
 
-    s_https_mux = xSemaphoreCreateMutex();
+    if (!display_lock(2000)) return ESP_ERR_TIMEOUT;
+    lv_display_add_event_cb(s_disp, display_render_done, LV_EVENT_RENDER_READY, NULL);
+    display_unlock();
+    s_https_mux = xSemaphoreCreateRecursiveMutex();
+    ESP_RETURN_ON_FALSE(s_https_mux, ESP_ERR_NO_MEM, TAG, "https mutex");
 
     if (s_touch) {
         lvgl_port_touch_cfg_t touch_cfg = {
-            .disp   = s_disp,
-            .handle = s_touch,
+            .disp      = s_disp,
+            .handle    = s_touch,
+            .io_result = display_note_touch_io,
         };
         ESP_RETURN_ON_FALSE(lvgl_port_add_touch(&touch_cfg), ESP_FAIL,
                             TAG, "lvgl touch");

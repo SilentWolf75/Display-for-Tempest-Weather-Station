@@ -100,7 +100,7 @@ RADAR page.
 
 ## Install
 
-Release binaries: [v1.0.0](https://github.com/SilentWolf75/tempest-weather-display/releases/tag/v1.0.0)
+Release binaries: [v1.0.1](https://github.com/SilentWolf75/Display-for-Tempest-Weather-Station/releases/tag/v1.0.1)
 
 **First flash (USB):** download `install.html` and `merged-firmware.bin` from the
 release. Open the HTML in Chrome or Edge, choose the merged bin, Connect.
@@ -146,9 +146,9 @@ Put your Tempest personal access token in `main/secrets.h`.
 Wi-Fi is configured on-device (first-boot setup screen, or Settings → Network),
 not via menuconfig.
 
-Note: creating `secrets.h` for the first time does **not** invalidate the build
-cache. Run `idf.py fullclean` after adding it, or the credentials will be
-silently compiled out.
+CMake tracks creation, removal, and edits of secrets.h; a normal build updates
+the credentials. If it is absent, the build uses an empty token and Wi-Fi setup
+on the panel. No token is needed for local UDP observations.
 
 ```bash
 idf.py set-target esp32p4 && idf.py build
@@ -191,3 +191,27 @@ firmware/      ESP-IDF project
   spiffs/icons/     generated artwork (python tools/build_icons.py)
 tools/         Python listener, simulator, and icon builder
 ```
+
+## Reliability and data coverage
+
+Measured rain totals and daily high/low are checkpointed in NVS every five
+minutes and restored after restart. They are labelled **partial**: packets
+missed while offline and the unsaved tail before sudden power loss cannot be
+reconstructed. Seven-day totals expire old dates; month and year totals follow
+the configured local calendar. Forecast-model rain never replaces station
+measurements.
+
+Graphs use a fixed 24-hour time axis and leave missing readings as gaps.
+Historical REST backfill merges with live readings by timestamp. AQI expires
+after two hours; hourly forecasts after twelve hours. Failed NWS updates are
+shown as unavailable rather than a confirmed all-clear.
+
+If several Tempest hubs share the LAN, set TEMPEST_SENSOR_SERIAL and
+TEMPEST_HUB_SERIAL in menuconfig to filter their broadcasts.
+
+The dashboard service switch applies on the next health cycle (up to 30 seconds).
+With the dashboard disabled, OTA uses the panel IP address on port 80.
+With it enabled, OTA is at http://tempest.local:8080/ota. The browser sends
+the app image directly and passes an optional password in X-OTA-Password.
+
+Computer regression checks and their limitations are in [tests/README.md](tests/README.md).

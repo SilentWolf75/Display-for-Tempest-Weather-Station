@@ -13,7 +13,7 @@
  * Rain is summed within a bucket rather than averaged; everything else is a
  * mean, and gust is a maximum. Averaging a gust would defeat the point of it.
  *
- * Cost: 288 buckets x ~44 bytes = ~13 KB.
+ * Cost: 1440 minute samples (~58 KB), plus a temporary backfill buffer.
  */
 
 #include <stdbool.h>
@@ -35,7 +35,7 @@ typedef enum {
 
 esp_err_t history_init(void);
 
-/* Folds one observation into the current bucket. Called from wx_state.c on
+/* Stores one observation in its timestamped minute slot. Called from wx_state.c on
  * every obs_st, so it must be cheap and must not take the state lock. */
 void history_add(int64_t epoch, float temp_c, float humidity_pct,
                  float pressure_mb, float wind_avg_ms, float wind_gust_ms,
@@ -57,9 +57,11 @@ bool history_get_secondary(hist_series_t series, float *out, int out_len);
 /* True once at least two buckets hold data -- below that a graph is a dot. */
 bool history_is_plottable(void);
 
-/* Wipe the ring and accept ascending backfill samples (REST history seed).
- * Must be paired with history_end_backfill(). */
-void history_begin_backfill(void);
+/* Stage REST separately; merge with live data only at completion. */
+esp_err_t history_begin_backfill(void);
+void history_add_backfill(int64_t epoch, float temp_c, float humidity_pct,
+                          float pressure_mb, float wind_avg_ms, float wind_gust_ms,
+                          float rain_mm, float uv);
 void history_end_backfill(void);
 
 /* Oldest and newest bucket timestamps, for axis labels. */

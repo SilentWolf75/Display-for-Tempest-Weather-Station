@@ -49,6 +49,7 @@ static const char *TAG = "main";
 
 #define UI_TICK_PERIOD_MS   1000
 #define BOOT_UI_READY_BIT   BIT0
+#define BOOT_UI_SUCCESS_BIT BIT1
 
 static EventGroupHandle_t s_boot_events;
 static bool               s_display_up;
@@ -164,6 +165,7 @@ static void ui_init_task(void *pvParameters)
             lv_obj_invalidate(scr);
         }
         pump_ui_frames(30);
+        if (scr) xEventGroupSetBits(s_boot_events, BOOT_UI_SUCCESS_BIT);
         display_unlock();
         ESP_LOGI(TAG, "UI initialized (tick and backlight wait for post-SDIO)");
     } else {
@@ -219,7 +221,9 @@ void app_main(void)
     } else {
         s_display_up = true;
         s_boot_events = xEventGroupCreate();
-        xTaskCreatePinnedToCore(ui_init_task, "ui_init", 65536, NULL, 5, NULL, 1);
+        ESP_ERROR_CHECK(s_boot_events ? ESP_OK : ESP_ERR_NO_MEM);
+        BaseType_t started = xTaskCreatePinnedToCore(ui_init_task, "ui_init", 65536, NULL, 5, NULL, 1);
+        ESP_ERROR_CHECK(started == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
         EventBits_t ui_bits = xEventGroupWaitBits(
             s_boot_events, BOOT_UI_READY_BIT, pdFALSE, pdFALSE,
             pdMS_TO_TICKS(90000));
@@ -303,8 +307,10 @@ void app_main(void)
         ota_start();
     }
 #endif
-    /* Task stays idle until mqtt_enabled is true in settings. */
-    mqtt_app_start();
+    /* No 8 KB task unless the user turned MQTT on. */
+    if (cfg_boot.mqtt_enabled) {
+        mqtt_app_start();
+    }
 
     /* --- health log, and the Milestone 2 evidence trail ---
      * If packet_count stays at 0 while Wi-Fi is connected, the C6 is not
@@ -313,16 +319,28 @@ void app_main(void)
      * the UDP listener all came up, so a freshly flashed image has proved
      * itself enough to keep. An image that crashes before this point reverts
      * on the next reset instead of stranding a wall-mounted panel. */
-    ota_mark_valid();
+    EventBits_t ready = s_boot_events ? xEventGroupGetBits(s_boot_events) : 0;
+    ota_validate_boot(s_display_up, (ready & BOOT_UI_SUCCESS_BIT) != 0, s_ui_timer != NULL);
 
     uint32_t last_count = 0;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(30000));
 
         uint32_t count = tempest_udp_packet_count();
-        if (cfg_boot.web_server_enabled && net_is_connected() && !web_server_is_running()) {
-            web_server_start();
+        cfg_t current_cfg;
+        cfg_get(&current_cfg);
+        if (net_is_connected()) {
+            if (current_cfg.web_server_enabled) {
+                if (!web_server_is_running()) web_server_start();
+            } else {
+                if (web_server_is_running()) web_server_stop();
+#if CONFIG_OTA_ENABLED
+                ota_start();
+#endif
+            }
         }
+        tempest_ws_poll();
+        display_log_health();
         uint8_t bright = display_get_brightness();
         ESP_LOGI(TAG, "udp packets: %lu (+%lu)  wifi: %s  heap: %u/%u  "
                  "uptime: %lus  backlight: %u%%  lvgl_tick: %u",
@@ -341,6 +359,7 @@ void app_main(void)
         wx_state_t snap;
         wx_snapshot(&snap);
         sdcard_log_weather(&snap, (int64_t)time(NULL));
+        wx_daily_checkpoint();
 
         if (count == last_count && net_is_connected()) {
             ESP_LOGW(TAG, "no UDP traffic in 30s despite an active network.");

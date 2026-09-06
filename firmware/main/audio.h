@@ -87,7 +87,7 @@ void audio_play_tts(const char *text);
  * 2. 0.5s pause
  * 3. Clear voice alert announcement
  */
-void audio_play_full_noaa_broadcast(const char *alert_text);
+bool audio_play_full_noaa_broadcast(const char *alert_text);
 
 /**
  * Audio scheduler tick called periodically from main loop.

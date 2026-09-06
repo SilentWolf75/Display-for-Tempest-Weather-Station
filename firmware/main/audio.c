@@ -23,7 +23,7 @@ static const char *TAG = "audio";
 #define TASK_STACK_SIZE     (8 * 1024)
 #define TASK_PRIO           5
 #define CLICK_QUEUE_LEN     8
-#define CLICK_TASK_STACK    (8 * 1024)
+#define CLICK_TASK_STACK    (4 * 1024)
 
 static i2s_chan_handle_t  s_tx_handle = NULL;
 static TaskHandle_t       s_play_task = NULL;
@@ -493,7 +493,7 @@ static void audio_master_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static void start_audio_task(audio_task_params_t *p)
+static bool start_audio_task(audio_task_params_t *p)
 {
     if (s_is_playing) {
         audio_stop();
@@ -506,7 +506,9 @@ static void start_audio_task(audio_task_params_t *p)
             free(p->tts_text);
         }
         free(p);
+        return false;
     }
+    return true;
 }
 
 void audio_play_alert(audio_alert_type_t type, int duration_ms)
@@ -578,17 +580,19 @@ void audio_play_tts(const char *text)
     start_audio_task(p);
 }
 
-void audio_play_full_noaa_broadcast(const char *alert_text)
+bool audio_play_full_noaa_broadcast(const char *alert_text)
 {
-    if (!alert_text || alert_text[0] == '\0') {
-        audio_play_noaa_tone(4);
-        return;
-    }
     audio_task_params_t *p = calloc(1, sizeof(audio_task_params_t));
-    if (!p) return;
-    p->is_broadcast = true;
-    p->tts_text = strdup(alert_text);
-    start_audio_task(p);
+    if (!p) return false;
+    if (alert_text && alert_text[0]) {
+        p->is_broadcast = true;
+        p->tts_text = strdup(alert_text);
+        if (!p->tts_text) { free(p); return false; }
+    } else {
+        p->type = AUDIO_ALERT_NOAA_1050HZ;
+        p->duration_ms = 4000;
+    }
+    return start_audio_task(p);
 }
 
 void audio_stop(void)

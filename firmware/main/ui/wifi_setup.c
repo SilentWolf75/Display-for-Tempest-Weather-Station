@@ -573,7 +573,7 @@ static void publish_scan_results(void)
         const char *saved = net_current_ssid();
         for (int i = 0; i < n; i++) {
             char row[96];
-            snprintf(row, sizeof(row), "%s  %s   (%s%s)",
+            snprintf(row, sizeof(row), "%s  %.32s   (%s%s)",
                      s_aps[i].secure ? LV_SYMBOL_WIFI : LV_SYMBOL_EYE_OPEN,
                      s_aps[i].ssid, signal_words(s_aps[i].rssi),
                      s_aps[i].secure ? "" : ", open");
@@ -694,7 +694,7 @@ static void on_connect(lv_event_t *e)
     if (req) {
         strncpy(req->ssid, s_chosen_ssid, sizeof(req->ssid) - 1);
         if (!s_chosen_open && pass) {
-            strncpy(req->pass, pass, sizeof(req->pass) - 1);
+            snprintf(req->pass, sizeof(req->pass), "%.*s", (int)sizeof(req->pass) - 1, pass);
         }
         xTaskCreate(connect_worker_task, "wifi_conn", CONNECT_STACK, req, CONNECT_PRIO, NULL);
     }
@@ -986,7 +986,7 @@ void wifi_setup_show(void)
             strncpy(req->ssid, net_current_ssid(), sizeof(req->ssid) - 1);
             cfg_t c;
             cfg_get(&c);
-            strncpy(req->pass, c.wifi_password, sizeof(req->pass) - 1);
+            snprintf(req->pass, sizeof(req->pass), "%.*s", (int)sizeof(req->pass) - 1, c.wifi_password);
             xTaskCreate(connect_worker_task, "wifi_conn", CONNECT_STACK, req,
                         CONNECT_PRIO, NULL);
             s_connecting = true;
