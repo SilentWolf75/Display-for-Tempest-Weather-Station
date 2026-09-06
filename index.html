@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tempest Weather Display — Install</title>
+  <title>Display for Tempest Weather Station — Install</title>
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
   <style>
     :root {
@@ -35,21 +35,33 @@
     h2 { font-size: 1rem; margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); }
     code, kbd { font-size: 0.9em; background: #0b0f19; padding: 0.1em 0.4em; border-radius: 4px; }
     a { color: var(--accent); }
-    esp-web-install-button { margin-top: 8px; }
+    esp-web-install-button { margin-top: 12px; display: none; }
+    esp-web-install-button.ready { display: inline-block; }
     ul { margin: 0; padding-left: 1.2rem; color: var(--dim); }
     li { margin: 0.35rem 0; }
+    input[type=file] { color: var(--dim); }
+    .ok { color: #10b981; }
   </style>
 </head>
 <body>
   <main>
     <h1>Display for Tempest Weather Station</h1>
-    <p class="sub">Elecrow CrowPanel Advance 10.1&quot; (ESP32-P4) &mdash; version 1.0.0</p>
+    <p class="sub">Elecrow CrowPanel Advance 10.1&quot; (ESP32-P4) &mdash; version 1.0.1</p>
 
     <div class="card">
       <h2>First install (USB)</h2>
-      <p>Chrome or Edge, USB cable, <strong>5 V / 2 A</strong> supply (PC USB ports brown out this panel). Puts bootloader, app, and icon storage on the flash in one shot.</p>
-      <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
-      <p class="sub">If the button is missing, this browser does not support Web Serial.</p>
+      <p>Chrome or Edge, USB cable, <strong>5 V / 2 A</strong> supply (PC USB ports brown out this panel).</p>
+      <ol>
+        <li>Download <code>merged-firmware.bin</code> from the
+          <a href="https://github.com/SilentWolf75/Display-for-Tempest-Weather-Station/releases/latest">latest release</a>.</li>
+        <li>Choose that file here, then click Connect.</li>
+      </ol>
+      <p>
+        <input id="bin" type="file" accept=".bin,application/octet-stream">
+      </p>
+      <p id="picked" class="sub"></p>
+      <esp-web-install-button id="install"></esp-web-install-button>
+      <p class="sub">If Connect never appears, this browser does not support Web Serial.</p>
     </div>
 
     <div class="card">
@@ -57,11 +69,42 @@
       <p>Once the panel is on Wi-Fi, do <em>not</em> re-flash the merged image. Upload only the app binary:</p>
       <ul>
         <li>Browser: <a href="http://tempest.local:8080/ota">http://tempest.local:8080/ota</a></li>
-        <li>File: <code>tempest_display.bin</code> from the <a href="https://github.com/SilentWolf75/tempest-weather-display/releases/latest">latest release</a> (not <code>merged-firmware.bin</code>)</li>
+        <li>File: <code>tempest_display.bin</code> from the same release (not <code>merged-firmware.bin</code>)</li>
         <li>Script: <code>curl -X POST --data-binary @tempest_display.bin http://tempest.local:8080/ota/update</code></li>
       </ul>
       <p>OTA writes the unused 3 MB slot and reboots. A bad image rolls back automatically. It does <strong>not</strong> rewrite the SPIFFS icon partition.</p>
     </div>
   </main>
+  <script>
+    const input = document.getElementById("bin");
+    const btn = document.getElementById("install");
+    const picked = document.getElementById("picked");
+    let binUrl;
+    let manUrl;
+
+    input.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      if (!file) {
+        return;
+      }
+      if (binUrl) URL.revokeObjectURL(binUrl);
+      if (manUrl) URL.revokeObjectURL(manUrl);
+      binUrl = URL.createObjectURL(file);
+      const manifest = {
+        name: "Display for Tempest Weather Station",
+        version: "1.0.1",
+        new_install_prompt_erase: true,
+        builds: [{
+          chipFamily: "ESP32-P4",
+          parts: [{ path: binUrl, offset: 0 }]
+        }]
+      };
+      manUrl = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/json" }));
+      btn.setAttribute("manifest", manUrl);
+      btn.classList.add("ready");
+      picked.textContent = file.name + "  (" + (file.size / (1024 * 1024)).toFixed(1) + " MB)";
+      picked.classList.add("ok");
+    });
+  </script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 {
-  "name": "Tempest Weather Display",
-  "version": "1.0.0",
+  "name": "Display for Tempest Weather Station",
+  "version": "1.0.1",
   "new_install_prompt_erase": true,
   "builds": [
     {
