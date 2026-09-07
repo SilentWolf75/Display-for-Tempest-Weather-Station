@@ -107,9 +107,10 @@ typedef struct {
     wx_comfort_mode_t comfort_mode;
     char     comfort_risk[24];
 
-    /* Rain since local midnight, accumulated from the per-minute field.
-     * rain_last_min_mm alone is useless on a display: it reads 0.00 through
-     * most of a steady drizzle. */
+    /* Rain since local midnight. UDP only carries the last minute, so the
+     * panel sums those tips locally and then floors today against WeatherFlow's
+     * precip_accum_local_day -- the same official total the other apps show.
+     * 7d / month / YTD remain summed on-device and stay marked partial. */
     float    rain_today_mm;
     float    rain_7d_mm;
     float    rain_month_mm;
@@ -193,6 +194,8 @@ void wx_update_hub_status(int rssi, uint32_t uptime_s);
 void wx_update_device_status(int rssi, float voltage, uint32_t sensor_status);
 void wx_update_forecast(const wx_state_t *partial);
 void wx_update_hourly(const wx_hourly_slot_t *slots, int count);
+void wx_apply_station_rain(float today_mm, float yesterday_mm,
+                           int64_t station_epoch);
 void wx_daily_checkpoint(void);
 bool wx_obs_values_valid(const wx_state_t *p);
 void wx_update_moon_schedule(int64_t rise, int64_t set);

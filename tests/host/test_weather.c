@@ -43,6 +43,43 @@ static void test_daily(void) {
     near(out.rain_7d_mm,0); near(out.rain_ytd_mm,5); assert(!out.daily_valid);
     puts("PASS daily deduplication, 7-day expiry, month/year rollover and zeros");
 }
+static void test_station_rain(void) {
+    wx_daily_t d={0}; wx_state_t out={0};
+    int64_t noon=nws_parse_iso("2026-09-06T12:00:00Z");
+    /* Official 0.04 in == 1.016 mm. UDP heard nothing. */
+    assert(wx_daily_raise_station(&d,noon,1.016f,0.5f,noon));
+    wx_daily_project(&d,noon,&out);
+    near(out.rain_today_mm,1.016f);
+    near(out.rain_7d_mm,1.516f);
+    near(out.rain_month_mm,1.016f);
+    /* Floor only -- a lower station total must not wipe local tips. */
+    wx_state_t p=reading(noon+60,0.2f,18);
+    wx_daily_add(&d,&p);
+    assert(!wx_daily_raise_station(&d,noon+60,1.016f,0.5f,noon+60));
+    wx_daily_project(&d,noon+60,&out);
+    near(out.rain_today_mm,1.216f);
+    /* Same-or-older UDP epoch is already covered by the station cursor. */
+    p=reading(noon+60,9,18);
+    wx_daily_add(&d,&p);
+    wx_daily_project(&d,noon+60,&out);
+    near(out.rain_today_mm,1.216f);
+    /* Newer minute still accumulates. */
+    p=reading(noon+120,0.3f,18);
+    wx_daily_add(&d,&p);
+    wx_daily_project(&d,noon+120,&out);
+    near(out.rain_today_mm,1.516f);
+    near(out.temp_high_today_c,18);
+    assert(out.daily_valid);
+    /* Persist a station floor with no UDP last_epoch change after restore. */
+    test_now=(time_t)noon;
+    assert(wx_state_init()==ESP_OK);
+    wx_apply_station_rain(1.016f,NAN,noon);
+    wx_daily_checkpoint();
+    assert(wx_state_init()==ESP_OK);
+    wx_snapshot(&out);
+    near(out.rain_today_mm,1.016f);
+    puts("PASS station rain floor, no double-count, hi/lo after rain-only day");
+}
 static void test_history(void) {
     assert(history_init()==ESP_OK);
     test_now=(time_t)nws_parse_iso("2026-09-04T12:04:00Z");
@@ -99,6 +136,6 @@ int main(void) {
 #else
     setenv("TZ","UTC0",1); tzset();
 #endif
-    test_dates();test_daily();test_history();test_state();test_runtime();
+    test_dates();test_daily();test_history();test_state();test_station_rain();test_runtime();
     puts("All weather regressions passed"); return 0;
 }

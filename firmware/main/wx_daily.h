@@ -15,3 +15,14 @@ typedef struct {
 /* Called while the wx_state mutex is held. */
 void wx_daily_add(wx_daily_t *d, const wx_state_t *p);
 void wx_daily_project(const wx_daily_t *d, int64_t now, wx_state_t *out);
+
+/* Raise today (and yesterday) to at least the station's official local-day
+ * totals. UDP 1-minute tips are missed whenever the panel is off or a LAN
+ * packet drops; WeatherFlow's precip_accum_local_day is the number the
+ * official apps show. Returns true if any bucket changed.
+ * station_epoch, when newer than last_epoch, becomes the dedup cursor so
+ * the next UDP minute is not added on top of rain the station already
+ * counted. */
+bool wx_daily_raise_station(wx_daily_t *d, int64_t now,
+                            float today_mm, float yesterday_mm,
+                            int64_t station_epoch);

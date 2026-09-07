@@ -21,8 +21,12 @@ void ui_notify_forecast_updated(void);
 static wx_state_t        s_state;
 static SemaphoreHandle_t s_lock;
 static wx_daily_t s_daily;
+static wx_daily_t s_saved_daily;
 static int64_t s_last_checkpoint_us;
-static int64_t s_saved_epoch;
+static float s_station_today_mm;
+static float s_station_yday_mm;
+static int64_t s_station_obs_epoch;
+static bool s_have_station_rain;
 
 #define LOCK()    xSemaphoreTake(s_lock, portMAX_DELAY)
 #define UNLOCK()  xSemaphoreGive(s_lock)
@@ -44,7 +48,7 @@ esp_err_t wx_state_init(void)
         }
         nvs_close(h);
     }
-    s_saved_epoch = s_daily.last_epoch;
+    s_saved_daily = s_daily;
     return ESP_OK;
 }
 
@@ -84,20 +88,63 @@ static int  s_strike_count;
 void wx_daily_checkpoint(void)
 {
     int64_t now = esp_timer_get_time();
-    if (now - s_last_checkpoint_us < 300000000LL) return;
+    /* First persist after a change is immediate so a station-rain floor
+     * survives a reboot; later writes stay five minutes apart. */
+    if (s_last_checkpoint_us != 0 &&
+        now - s_last_checkpoint_us < 300000000LL) {
+        return;
+    }
     wx_daily_t saved;
     LOCK();
     saved = s_daily;
     UNLOCK();
-    if (!saved.last_epoch || saved.last_epoch == s_saved_epoch) return;
+    if (memcmp(&saved, &s_saved_daily, sizeof(saved)) == 0) {
+        return;
+    }
     nvs_handle_t h;
     if (nvs_open("wx_daily", NVS_READWRITE, &h) != ESP_OK) return;
     esp_err_t err = nvs_set_blob(h, "totals", &saved, sizeof(saved));
     if (err == ESP_OK) err = nvs_commit(h);
     nvs_close(h);
     if (err == ESP_OK) {
-        s_saved_epoch = saved.last_epoch;
+        s_saved_daily = saved;
         s_last_checkpoint_us = now;
+    }
+}
+
+void wx_apply_station_rain(float today_mm, float yesterday_mm,
+                           int64_t station_epoch)
+{
+    if (isfinite(today_mm) || isfinite(yesterday_mm)) {
+        s_station_today_mm = today_mm;
+        s_station_yday_mm = yesterday_mm;
+        s_station_obs_epoch = station_epoch;
+        s_have_station_rain = true;
+    }
+    if (!s_have_station_rain) {
+        return;
+    }
+
+    int64_t now = (int64_t)time(NULL);
+    if (now < 1700000000LL) {
+        ESP_LOGW(TAG, "station rain cached; waiting for clock");
+        return;
+    }
+
+    LOCK();
+    bool changed = wx_daily_raise_station(&s_daily, now, s_station_today_mm,
+                                          s_station_yday_mm,
+                                          s_station_obs_epoch);
+    if (changed) {
+        wx_daily_project(&s_daily, now, &s_state);
+        s_last_checkpoint_us = 0;
+    }
+    UNLOCK();
+
+    if (changed) {
+        ESP_LOGI(TAG, "station rain today %.2f mm",
+                 (double)s_station_today_mm);
+        ui_notify_forecast_updated();
     }
 }
 

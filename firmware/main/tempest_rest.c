@@ -111,10 +111,20 @@ static esp_err_t parse_forecast(const char *json, int len)
 
     wx_state_t p = {0};
 
+    float station_rain_today = NAN;
+    float station_rain_yday = NAN;
+    int64_t station_obs_epoch = 0;
+
     const cJSON *cc = cJSON_GetObjectItemCaseSensitive(root, "current_conditions");
     if (cJSON_IsObject(cc)) {
         copy_str(p.current_conditions, sizeof(p.current_conditions), cc, "conditions");
         copy_str(p.current_icon, sizeof(p.current_icon), cc, "icon");
+        /* Official local-day rain -- the number the Tempest app shows.
+         * UDP only carries the last minute, so missed packets cannot be
+         * reconstructed from the LAN feed. */
+        station_rain_today = (float)num_or(cc, "precip_accum_local_day", NAN);
+        station_rain_yday = (float)num_or(cc, "precip_accum_local_yesterday", NAN);
+        station_obs_epoch = (int64_t)num_or(cc, "time", 0);
         /* Deliberately NOT deriving a pressure trend here. sea_level_pressure
          * minus station_pressure is a fixed altitude offset, not a tendency --
          * it was a bug. The real 3-hour trend is accumulated from the local
@@ -165,6 +175,8 @@ static esp_err_t parse_forecast(const char *json, int len)
         snprintf(p.current_icon, sizeof(p.current_icon), "%.*s", (int)sizeof(p.current_icon) - 1, p.forecast[0].icon);
     }
 
+    wx_apply_station_rain(station_rain_today, station_rain_yday,
+                          station_obs_epoch);
     wx_update_forecast(&p);
     ESP_LOGI(TAG, "forecast updated: %d days, now '%s'",
              p.forecast_days, p.current_conditions);
@@ -859,6 +871,9 @@ static void rest_task(void *arg)
      * race to the first UDP obs_st on this board, so keep trying until the
      * clock is trustworthy or we give up for this boot cycle. */
     if (wait_for_plausible_clock(45)) {
+        /* Forecast often wins the race against SNTP. Re-apply the cached
+         * station rain now that local midnight is trustworthy. */
+        wx_apply_station_rain(NAN, NAN, 0);
         try_history_backfill();
     } else {
         ESP_LOGW(TAG, "clock unsynced; history backfill deferred");
